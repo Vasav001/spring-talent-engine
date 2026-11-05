@@ -79,16 +79,16 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 
 | Role | Permissions |
 |---|---|
-| `OWNER` | Everything, including `BILLING_MANAGE`, `BYOK_MANAGE`, `MEMBER_MANAGE` |
-| `RECRUITER` | `JOB_WRITE`, `BATCH_UPLOAD`, `RESULT_OVERRIDE`, `RESULT_READ` |
-| `VIEWER` | `RESULT_READ` |
+| `OWNER` | Everything, including `BILLING_MANAGE`, `BYOK_MANAGE`, `MEMBER_MANAGE`, `JOB_MANAGE_ALL` |
+| `RECRUITER` | `JOB_READ`, `JOB_WRITE`, `BATCH_UPLOAD`, `RESULT_OVERRIDE`, `RESULT_READ` |
+| `VIEWER` | `JOB_READ`, `RESULT_READ` |
 
 - On each request: role for the selected tenant → Spring Security authorities → `@PreAuthorize("hasAuthority('JOB_WRITE')")`.
 - Roles are **not** put in the JWT (they depend on the tenant).
 
 ### 3.3 Ownership rule (the one user-level permission)
-- A `RECRUITER` can edit or delete only jobs they created; `OWNER` can edit any job.
-- Implemented as `@PreAuthorize("@jobAccess.canEdit(#jobId)")` (built in Phase 2, together with jobs).
+- A `RECRUITER` can edit or delete only jobs they created; `OWNER` can edit any job (`JOB_MANAGE_ALL`).
+- Implemented as `@PreAuthorize("@jobAccess.canEdit(#jobId)")`. A job from another tenant is invisible (RLS), so it returns 404 instead of revealing that it exists.
 - An `OWNER` cannot change their own role (prevents locking the tenant out).
 
 ---
@@ -134,9 +134,10 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 
 ### 5.1 Job creation (once per job)
 1. The recruiter pastes the job description.
-2. **One LLM call** → `ExtractedRubric` record (structured output via `.entity(...)`): skills, `MUST`/`NICE`, weights, minimum years.
-3. Skills are normalized through the `skill_synonyms` table (`k8s → Kubernetes`).
-4. **The recruiter reviews and edits the rubric** (human in the loop), then publishes the job.
+2. **One LLM call** (temperature 0) → `ExtractedRubric` record (structured output via `.entity(...)`): skills, `MUST`/`NICE`, weights 1–5, minimum years. The LLM call runs outside any DB transaction.
+3. `Rubric.clean(...)` normalizes skills through the `skill_synonyms` table (`k8s → Kubernetes`), clamps values, merges duplicates (MUST wins) and keeps at most 20 items. The same cleaning runs on manual edits.
+4. If extraction fails, the job is still created with an empty rubric; the recruiter retries (`extract-rubric`) or edits manually.
+5. **The recruiter reviews and edits the rubric** (human in the loop), then publishes the job. Only `DRAFT` jobs can change; publishing needs at least one requirement.
 
 ### 5.2 Batch upload
 1. `POST /batches` {jobId, fileNames[]} → reserve credits → returns **presigned PUT URLs**.
@@ -215,8 +216,13 @@ POST   /billing/fake-gateway/{paymentId}    {result: SUCCESS|FAILURE} simulate p
 GET    /billing/ledger                      credit history
 
 POST   /jobs                                create job (triggers rubric extraction)
-PUT    /jobs/{id}/requirements              edit rubric
-POST   /jobs/{id}/publish
+GET    /jobs?status=&page=&size=            paged job list
+GET    /jobs/{id}                           job + rubric
+PUT    /jobs/{id}/requirements              replace rubric (draft only)
+POST   /jobs/{id}/extract-rubric            re-run LLM extraction (draft only)
+POST   /jobs/{id}/publish                   DRAFT → PUBLISHED
+POST   /jobs/{id}/close                     PUBLISHED → CLOSED
+DELETE /jobs/{id}                           delete draft
 
 POST   /batches                             reserve credits, get presigned URLs
 POST   /batches/{id}/complete               enqueue processing
@@ -266,10 +272,11 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [ ] Run on the Docker PC: app starts, `TenantIsolationTests` pass, try `/me` and `/tenants` with a real Auth0 token
 
 ### Phase 2 — Jobs & rubric
-- [ ] Job CRUD
-- [ ] LLM rubric extraction (structured output)
-- [ ] Synonym table + normalization
-- [ ] Rubric edit + publish
+- [x] Job CRUD + paged list, RLS on `jobs` and `job_requirements`
+- [x] LLM rubric extraction (structured output)
+- [x] Synonym table (seeded) + normalization, `RubricTests`
+- [x] Rubric edit + publish/close, job ownership rule (`JobAccess`)
+- [ ] Run on the Docker PC: create a job with a real JD, check the extracted rubric, edit, publish
 
 ### Phase 3 — Single-resume screening (end to end, synchronous)
 - [ ] Tika text extraction + PII masking

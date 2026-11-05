@@ -6,8 +6,8 @@ import java.util.Set;
 
 public enum MemberRole {
     OWNER(EnumSet.allOf(Permission.class)),
-    RECRUITER(EnumSet.of(Permission.JOB_WRITE, Permission.BATCH_UPLOAD, Permission.RESULT_OVERRIDE, Permission.RESULT_READ)),
-    VIEWER(EnumSet.of(Permission.RESULT_READ));
+    RECRUITER(EnumSet.of(Permission.JOB_READ, Permission.JOB_WRITE, Permission.BATCH_UPLOAD, Permission.RESULT_OVERRIDE, Permission.RESULT_READ)),
+    VIEWER(EnumSet.of(Permission.JOB_READ, Permission.RESULT_READ));
 
     private final Set<Permission> permissions;
 

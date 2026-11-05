@@ -24,6 +24,12 @@ public final class CurrentUser {
                 .map(name -> name.toLowerCase(Locale.ROOT));
     }
 
+    public static boolean hasAuthority(String authority) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(granted -> authority.equals(granted.getAuthority()));
+    }
+
     public static String requireEmail() {
         return email().orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token has no email claim"));
     }
