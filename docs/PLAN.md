@@ -61,14 +61,16 @@ Companies (tenants) upload batches of resumes against a job description. The sys
 ## 3. Multitenancy & access control
 
 ### 3.1 Tenant isolation (shared schema + RLS)
-- **IdP handles identity only.** The JWT supplies `sub` + `email`. Tenancy and roles live in our database, so the IdP can be swapped without code changes.
-- **Tenant selection:** `X-Tenant-Id` header, validated against `tenant_members` in a filter → stored in a request-scoped `TenantContext`.
-- **Shared schema:** every tenant-owned table has a `tenant_id` column (Hibernate `@TenantId`).
-- **Postgres Row-Level Security** as a second layer:
-  - Policy: `USING (tenant_id = current_setting('app.tenant_id')::uuid)`.
-  - Set it **per transaction**: `set_config('app.tenant_id', ?, true)`, so it never leaks across pooled connections.
-  - The app connects as a **non-owner role** (table owners bypass RLS).
-  - Integration test: tenant A queries tenant B's data → 0 rows.
+- **IdP handles identity only.** The access token carries the user's **verified email** in a custom claim (Auth0 post-login Action, see Phase 0). Spring uses it as the principal name (`principal-claim-name`). Tenancy and roles live in our database, keyed by email, so the IdP can be swapped without code changes.
+- **Tenant selection:** `X-Tenant-Id` header → `TenantResolutionFilter` checks membership → stores the tenant in `TenantContext` (thread-local) and adds the role's permissions as authorities.
+- **Shared schema:** every tenant-owned table has a `tenant_id` column; services set it from `TenantContext` on insert.
+- **Postgres Row-Level Security** does the filtering:
+  - Two DB roles: Flyway migrates as the owner (`talent`); the app connects as `talent_app` (non-owner, so RLS applies). The app role is created by migration `V2` using Flyway placeholders.
+  - `TenantAwareDataSource` runs `set_config('app.tenant_id', …)` and `set_config('app.user_email', …)` on **every connection checkout**. Each checkout overwrites the previous values, so a pooled connection can never carry another tenant's context.
+  - Tenant-owned tables: one policy `FOR ALL USING (tenant_id = current tenant)`.
+  - `tenant_members` adds a read-only policy `email = current user`, so a user can list their own memberships before choosing a tenant.
+  - Creating a tenant binds the current transaction to the new tenant (`set_config(..., true)`) so the owner membership passes the insert policy.
+  - Integration tests (`TenantIsolationTests`): app runs as `talent_app`; tenant A sees only A's rows; inserting into tenant B fails.
 - **Async workers** set `TenantContext` from the queue message before touching the database.
 - **S3 keys** are prefixed per tenant: `tenants/{tenantId}/batches/{batchId}/{resumeId}.pdf`.
 
@@ -86,7 +88,8 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 
 ### 3.3 Ownership rule (the one user-level permission)
 - A `RECRUITER` can edit or delete only jobs they created; `OWNER` can edit any job.
-- Implemented as `@PreAuthorize("@jobAccess.canEdit(#jobId)")`.
+- Implemented as `@PreAuthorize("@jobAccess.canEdit(#jobId)")` (built in Phase 2, together with jobs).
+- An `OWNER` cannot change their own role (prevents locking the tenant out).
 
 ---
 
@@ -175,19 +178,19 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 | Table | Key columns |
 |---|---|
 | `tenants` | id, name, created_at |
-| `tenant_members` | tenant_id, user_sub, email, role (OWNER/RECRUITER/VIEWER) |
+| `tenant_members` | id, tenant_id, email, role (OWNER/RECRUITER/VIEWER), created_at — unique (tenant_id, email) |
 | `plans` (global, seeded) | code, name, monthly_price, monthly_credits (null = unlimited), byok |
 | `subscriptions` | id, tenant_id, plan_code, period_start, period_end, credits_remaining |
 | `payments` | id, tenant_id, subscription_id, plan_code, amount, currency, status (PENDING/SUCCEEDED/FAILED), provider (FAKE), created_at |
 | `credit_ledger` | id, tenant_id, type (GRANT/RESERVE/REFUND), amount, batch_id, resume_id, created_at |
 | `tenant_llm_settings` | tenant_id, base_url, model, api_key_encrypted, api_key_last4 |
 | `skill_synonyms` (global) | alias, canonical |
-| `jobs` | id, tenant_id, title, description, status (DRAFT/PUBLISHED/CLOSED), created_by |
+| `jobs` | id, tenant_id, title, description, status (DRAFT/PUBLISHED/CLOSED), created_by (email) |
 | `job_requirements` | id, tenant_id, job_id, skill, type (MUST/NICE), weight, min_years |
 | `batches` | id, tenant_id, job_id, total, processed, failed, status, created_by |
 | `resumes` | id, tenant_id, batch_id, file_name, storage_key, content_hash, status (UPLOADED/QUEUED/SCREENED/LOW_MATCH/FAILED), github_username |
 | `screening_results` | id, tenant_id, resume_id, keyword_score, ai_score, final_score, recommendation, scorecard (jsonb), model, tokens_in, tokens_out |
-| `review_overrides` | id, tenant_id, result_id, reviewer_sub, override_score, reason, created_at |
+| `review_overrides` | id, tenant_id, result_id, reviewer_email, override_score, reason, created_at |
 | `usage_records` | id, tenant_id, resume_id, tokens_in, tokens_out, provider, model, created_at |
 | `event_publication` | managed by Spring Modulith (transactional outbox) |
 
@@ -244,14 +247,23 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] `application.yaml` + `local` / `aws` profiles, secrets from environment variables (IntelliJ run config; names listed in `.env.example`)
 - [x] Flyway `V1__event_publication.sql` (Modulith outbox table)
 - [ ] Auth0 tenant + SPA app + API audience
+- [ ] Auth0 post-login Action that puts the verified email into the access token:
+  ```js
+  exports.onExecutePostLogin = async (event, api) => {
+    if (event.user.email_verified) {
+      api.accessToken.setCustomClaim('https://spring-talent-engine/email', event.user.email);
+    }
+  };
+  ```
 - [ ] Free LLM API key (Groq or OpenRouter); confirm the model supports tool calling
 
 ### Phase 1 — Tenancy foundation
-- [ ] JWT resource server, `/me`
-- [ ] Tenants, members, roles, `TenantContext` filter
-- [ ] RBAC: role → permissions map, `@PreAuthorize` checks, job ownership rule
-- [ ] Postgres RLS + non-owner app role + integration tests proving cross-tenant reads fail
-- [ ] `ApplicationModules.verify()` test
+- [x] JWT resource server (email claim as principal), `/me`
+- [x] Tenants, members, roles, `TenantResolutionFilter` + `TenantContext`
+- [x] RBAC: role → permissions map, `@PreAuthorize` checks (job ownership rule moves to Phase 2)
+- [x] Postgres RLS + non-owner app role + `TenantIsolationTests`
+- [x] `ApplicationModules.verify()` test
+- [ ] Run on the Docker PC: app starts, `TenantIsolationTests` pass, try `/me` and `/tenants` with a real Auth0 token
 
 ### Phase 2 — Jobs & rubric
 - [ ] Job CRUD
@@ -385,7 +397,7 @@ Everything else gets its version from a BOM — no version tag needed:
 ### Local infrastructure (`compose.yaml`)
 | Service | Image |
 |---|---|
-| Postgres | `postgres:17` |
+| Postgres | `postgres:17.10-alpine` (host port 5433) |
 | MinIO | `minio/minio` |
 | ElasticMQ | `softwaremill/elasticmq-native` |
 

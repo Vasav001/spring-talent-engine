@@ -5,8 +5,19 @@ spring:
     default: local
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5433/talent}
-    username: ${DB_USERNAME:talent}
+    username: ${DB_APP_USERNAME:talent_app}
+    password: ${DB_APP_PASSWORD:talent_app}
+  flyway:
+    user: ${DB_USERNAME:talent}
     password: ${DB_PASSWORD:talent}
+    placeholders:
+      app_user: ${DB_APP_USERNAME:talent_app}
+      app_password: ${DB_APP_PASSWORD:talent_app}
+  data:
+    web:
+      pageable:
+        max-page-size: 100
+        serialization-mode: via-dto
   jpa:
     open-in-view: false
     hibernate:
@@ -17,6 +28,7 @@ spring:
         jwt:
           issuer-uri: ${AUTH0_ISSUER_URI}
           audiences: ${AUTH0_AUDIENCE}
+          principal-claim-name: ${AUTH0_EMAIL_CLAIM:https://spring-talent-engine/email}
   ai:
     model:
       embedding: none
