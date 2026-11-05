@@ -4,8 +4,8 @@ spring:
       region:
         static: ap-south-1
       credentials:
-        access-key: minioadmin
-        secret-key: minioadmin
+        access-key: rustfsadmin
+        secret-key: rustfsadmin
       s3:
         endpoint: http://localhost:9000
         path-style-access-enabled: true

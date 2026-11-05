@@ -13,37 +13,48 @@ services:
     volumes:
       - talent-postgres-data:/var/lib/postgresql/data
 
-  minio:
-    image: minio/minio
-    container_name: talent-minio
-    command: server /data --console-address ":9001"
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    container_name: talent-rustfs
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_CONSOLE_ENABLE: "true"
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - talent-minio-data:/data
+      - talent-rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  minio-init:
-    image: minio/mc
-    container_name: talent-minio-init
+  rustfs-init:
+    image: amazon/aws-cli:2.39.4
+    container_name: talent-rustfs-init
     depends_on:
-      - minio
-    entrypoint: >
-      sh -c "until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done;
-             mc mb --ignore-existing local/talent-resumes"
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
+      AWS_DEFAULT_REGION: ap-south-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket talent-resumes
+        || aws --endpoint-url http://rustfs:9000 s3 mb s3://talent-resumes
 
   elasticmq:
-    image: softwaremill/elasticmq-native
+    image: softwaremill/elasticmq-native:1.7.1
     container_name: talent-elasticmq
     ports:
       - "9324:9324"
-      - "9325:9325"
     volumes:
       - ./docker/elasticmq.conf:/opt/elasticmq.conf
 
 volumes:
   talent-postgres-data:
-  talent-minio-data:
+  talent-rustfs-data:

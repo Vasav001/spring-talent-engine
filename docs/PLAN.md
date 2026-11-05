@@ -49,7 +49,7 @@ Companies (tenants) upload batches of resumes against a job description. The sys
 
 | Purpose | `local` profile | `aws` profile (demo week) |
 |---|---|---|
-| File storage | MinIO (S3 API) | S3 |
+| File storage | RustFS (S3 API) | S3 |
 | Queue | ElasticMQ (SQS API) | SQS (+ dead-letter queue) |
 | Database | Postgres (Docker) | Postgres (Docker on EC2) — no RDS |
 | LLM | Groq / OpenRouter / Gemini via OpenAI-compatible API | Same |
@@ -140,7 +140,7 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 
 ### 5.2 Batch upload
 1. `POST /batches` {jobId, fileNames[]} → reserve credits → returns **presigned PUT URLs**.
-2. The browser uploads directly to S3/MinIO.
+2. The browser uploads directly to S3/RustFS.
 3. `POST /batches/{id}/complete` → one queue message per resume `{tenantId, batchId, resumeId}`.
 4. Progress is pushed to the UI over **SSE** (`processed / failed / total`).
 
@@ -243,7 +243,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] Align `pom.xml` with section 12 (removed Spring Batch, added Spring Cloud AWS S3/SQS)
 - [ ] Add test dependencies when needed (WireMock, Awaitility, LocalStack)
 - [x] Package-per-module layout + `ModularityTests`
-- [x] `compose.yaml`: Postgres, MinIO (+ bucket), ElasticMQ (+ queue and dead-letter queue)
+- [x] `compose.yaml`: Postgres, RustFS (+ bucket via AWS CLI init container), ElasticMQ (+ queue and dead-letter queue)
 - [x] `application.yaml` + `local` / `aws` profiles, secrets from environment variables (IntelliJ run config; names listed in `.env.example`)
 - [x] Flyway `V1__event_publication.sql` (Modulith outbox table)
 - [ ] Auth0 tenant + SPA app + API audience
@@ -279,7 +279,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [ ] Results page
 
 ### Phase 4 — Batch pipeline
-- [ ] Presigned uploads (MinIO)
+- [ ] Presigned uploads (RustFS)
 - [ ] Queue fan-out (ElasticMQ), configurable concurrency, dead-letter queue
 - [ ] Idempotency + content-hash dedup
 - [ ] SSE progress
@@ -321,7 +321,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - **Billing behind an interface:** fake gateway now, Stripe later; payment results handled idempotently through events.
 - **Atomic credit reservation + ledger:** concurrent batch submissions can't overspend, and every credit change is audited.
 - **Queue-based batching:** rate-limit-aware concurrency, retries, dead-letter queue, idempotency.
-- **Portable infrastructure:** S3/SQS APIs with MinIO/ElasticMQ locally — the same code runs on and off AWS.
+- **Portable infrastructure:** S3/SQS APIs with RustFS/ElasticMQ locally — the same code runs on and off AWS.
 - **Model independence + BYOK:** one OpenAI-compatible client, configured per tenant at runtime.
 
 ---
@@ -379,7 +379,7 @@ Everything else gets its version from a BOM — no version tag needed:
 | Boilerplate | `lombok` (optional) | Getters/builders on JPA entities; records for DTOs |
 | AI | `spring-ai-starter-model-openai` | Any OpenAI-compatible provider (Groq, OpenRouter, Gemini…) |
 | AI | `spring-ai-tika-document-reader` | PDF/DOCX → text |
-| AWS | `spring-cloud-aws-starter-s3` | S3 / MinIO + presigned URLs |
+| AWS | `spring-cloud-aws-starter-s3` | S3 / RustFS + presigned URLs |
 | AWS | `spring-cloud-aws-starter-sqs` | SQS / ElasticMQ listener + sender |
 | API docs | `org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3` | Swagger UI |
 | Dev | `spring-boot-docker-compose` (optional, dev only) | Auto-starts `compose.yaml` |
@@ -398,8 +398,9 @@ Everything else gets its version from a BOM — no version tag needed:
 | Service | Image |
 |---|---|
 | Postgres | `postgres:17.10-alpine` (host port 5433) |
-| MinIO | `minio/minio` |
-| ElasticMQ | `softwaremill/elasticmq-native` |
+| RustFS | `rustfs/rustfs:1.0.4` (API 9000, console 9001) |
+| Bucket init | `amazon/aws-cli:2.39.4` |
+| ElasticMQ | `softwaremill/elasticmq-native:1.7.1` |
 
 ### Frontend
 `react`, `vite`, `typescript`, `@auth0/auth0-react`, `@tanstack/react-query`, `react-router`, a UI kit (e.g. shadcn/ui + Tailwind).
