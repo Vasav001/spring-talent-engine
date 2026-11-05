@@ -14,6 +14,10 @@ spring:
     placeholders:
       "[app_user]": ${DB_APP_USERNAME:talent_app}
       "[app_password]": ${DB_APP_PASSWORD:talent_app}
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
   data:
     web:
       pageable:
@@ -45,6 +49,12 @@ spring:
         options:
           model: ${LLM_MODEL}
           temperature: 0.0
+
+app:
+  storage:
+    bucket: ${STORAGE_BUCKET:talent-resumes}
+  github:
+    token: ${GITHUB_TOKEN:}
 
 management:
   endpoints:

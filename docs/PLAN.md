@@ -145,26 +145,31 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 3. `POST /batches/{id}/complete` → one queue message per resume `{tenantId, batchId, resumeId}`.
 4. Progress is pushed to the UI over **SSE** (`processed / failed / total`).
 
-### 5.3 Per-resume worker (SQS listener, concurrency set by config)
-1. **Idempotency:** skip the resume if already processed; detect duplicates within a batch with a SHA-256 content hash.
-2. **Extract text** with Apache Tika (PDF, DOCX).
-3. **Mask PII** (email, phone) with regex before anything goes to the LLM.
-4. **Keyword gate:** normalized skill match against the rubric → `keywordScore` (0–100).
-   - Any MUST skill missing → status `LOW_MATCH`, LLM skipped, credit refunded. The recruiter can force a full screening.
-5. **AI agent** (one `ChatClient` call with tools) → `ScoreCard` record:
-   - For each rubric item: score 0–5 + **evidence quote** copied word-for-word from the resume.
-   - Strengths, gaps, recommendation (`STRONG_YES / YES / MAYBE / NO`).
-6. **Verify the output in Java:** every evidence quote must appear in the resume text (after case/whitespace normalization).
-   - If any fail → retry once with feedback naming the bad quotes → if they still fail, mark those items `UNVERIFIED` and score them 0.
-7. **Final score** = `0.3 × keywordScore + 0.7 × aiScore` (weights configurable).
-8. Save the result and usage, then publish a `ResumeScreened` event (updates batch progress and usage).
-9. Failures: retried by the queue → dead-letter queue after N attempts → status `FAILED`, credit refunded.
+### 5.3 Upload (ingestion module, Phase 3: one file per request)
+1. `POST /jobs/{jobId}/resumes` (multipart, PDF/DOCX, max 5 MB); the job must be `PUBLISHED`.
+2. **Duplicate check:** SHA-256 content hash, unique per job → 409.
+3. **Extract text** with Spring AI's `TikaDocumentReader`; blank text (scanned PDF) → 422. Text capped at 30,000 characters.
+4. Read the GitHub username from the raw text, then **mask PII** (email, phone numbers with 10+ digits) before storing the text.
+5. Store the original file in S3/RustFS (`tenants/{tenantId}/jobs/{jobId}/{uuid}.pdf`) and the masked text in `resumes`.
 
-### 5.4 Agent tools (`@Tool` methods; the model decides when to call them)
+### 5.4 Screening (screening module; synchronous in Phase 3, called by the queue worker from Phase 4)
+1. **Keyword gate** (`KeywordGate`, pure Java): each rubric skill plus its synonyms, matched on word boundaries (so "Java" doesn't match "JavaScript") → `keywordScore` = matched weight / total weight.
+   - Any MUST skill missing → `LOW_MATCH`, LLM skipped. `?force=true` runs the agent anyway.
+2. **AI agent** (`ScreeningAgent`: one `ChatClient` call with a tool) → `AgentScoreCard`:
+   - For each rubric item: score 0–5 + **evidence quote** copied word-for-word from the resume.
+   - Strengths, gaps, recommendation (`STRONG_YES / YES / MAYBE / NO`), one-sentence summary.
+3. **Verify the output in Java** (`ScoreCardVerifier`): every evidence quote with score > 0 must appear in the resume (case, quotes, bullets and whitespace normalized; `...` splits a quote into parts).
+   - If any fail → **one retry** with feedback naming the skills → anything still unsupported gets score 0 and `verified: false`.
+4. **Scores:** `aiScore` = weighted average of criterion scores (0–100); **final score** = `0.3 × keywordScore + 0.7 × aiScore` (constant in `ScreeningOutcome`). `LOW_MATCH` gets `0.3 × keywordScore` so it always ranks below screened candidates.
+5. Save one `screening_results` row per resume (re-screening overwrites it) with the report as `jsonb`, model name and token counts. AI errors → status `FAILED` with a generic message; details go to the log.
+6. From Phase 4: failures retried by the queue → dead-letter queue after 3 attempts → `FAILED`, credit refunded.
+
+### 5.5 Agent tool (`@Tool` method; the model decides whether to call it)
 | Tool | Purpose |
 |---|---|
-| `normalizeSkill(name)` | Canonical skill name from the synonym table |
-| `getGithubSummary(username)` | Public repos, top languages, recent activity (GitHub REST API) — only useful when the resume has a GitHub link |
+| `getGithubSummary(username)` | Own public repos, top languages, recently pushed repos (GitHub REST API, 5 s timeout, optional `GITHUB_TOKEN`). Only called when the resume links a GitHub profile; used for strengths/gaps, never as evidence. |
+
+A `normalizeSkill` tool was dropped: synonyms are applied in Java before and after the LLM call, so the tool added nothing.
 
 ### 5.5 Model independence
 - Uses only the **OpenAI-compatible** Spring AI starter. Switching provider changes only `base-url`, `api-key` and `model`.
@@ -227,10 +232,11 @@ DELETE /jobs/{id}                           delete draft
 POST   /batches                             reserve credits, get presigned URLs
 POST   /batches/{id}/complete               enqueue processing
 GET    /batches/{id}/events        (SSE)    progress stream
-GET    /jobs/{id}/results?sort=final_score  ranked candidates
-GET    /results/{id}                        score card with evidence
+POST   /jobs/{id}/resumes          (multipart) upload one resume
+POST   /resumes/{id}/screen?force=          screen now (force bypasses the keyword gate)
+GET    /jobs/{id}/results?status=&page=     ranked candidates (final score, highest first)
+GET    /results/{id}                        full report with evidence
 POST   /results/{id}/override               human override
-POST   /resumes/{id}/force-screen           bypass keyword gate
 ```
 
 ---
@@ -279,11 +285,12 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [ ] Run on the Docker PC: create a job with a real JD, check the extracted rubric, edit, publish
 
 ### Phase 3 — Single-resume screening (end to end, synchronous)
-- [ ] Tika text extraction + PII masking
-- [ ] Keyword gate
-- [ ] Agent with tools → `ScoreCard`
-- [ ] Evidence verification + retry
-- [ ] Results page
+- [x] Upload, Tika text extraction + PII masking, file in S3/RustFS, duplicate check
+- [x] Keyword gate
+- [x] Agent with GitHub tool → `AgentScoreCard`
+- [x] Evidence verification + retry
+- [x] Results API (ranked list + full report), `PiiMaskerTests`, `ScreeningLogicTests`
+- [ ] Run on the Docker PC: upload 3–5 real resumes, screen them, check evidence and ranking
 
 ### Phase 4 — Batch pipeline
 - [ ] Presigned uploads (RustFS)
