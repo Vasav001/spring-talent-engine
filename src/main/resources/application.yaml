@@ -1,3 +1,39 @@
 spring:
-    application:
-        name: spring-talent-engine
+  application:
+    name: spring-talent-engine
+  profiles:
+    default: local
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/talent}
+    username: ${DB_USERNAME:talent}
+    password: ${DB_PASSWORD:talent}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH0_ISSUER_URI}
+          audiences: ${AUTH0_AUDIENCE}
+  ai:
+    model:
+      embedding: none
+      image: none
+      moderation: none
+      audio:
+        speech: none
+        transcription: none
+    openai:
+      base-url: ${LLM_BASE_URL}
+      api-key: ${LLM_API_KEY}
+      chat:
+        options:
+          model: ${LLM_MODEL}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,modulith

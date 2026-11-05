@@ -1,0 +1,21 @@
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://test.invalid/
+          audiences: test
+  ai:
+    openai:
+      base-url: http://localhost:1
+      api-key: test
+      chat:
+        options:
+          model: test
+  cloud:
+    aws:
+      region:
+        static: ap-south-1
+      credentials:
+        access-key: test
+        secret-key: test
