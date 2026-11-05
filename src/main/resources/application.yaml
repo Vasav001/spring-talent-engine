@@ -8,11 +8,12 @@ spring:
     username: ${DB_APP_USERNAME:talent_app}
     password: ${DB_APP_PASSWORD:talent_app}
   flyway:
+    url: ${spring.datasource.url}
     user: ${DB_USERNAME:talent}
     password: ${DB_PASSWORD:talent}
     placeholders:
-      app_user: ${DB_APP_USERNAME:talent_app}
-      app_password: ${DB_APP_PASSWORD:talent_app}
+      "[app_user]": ${DB_APP_USERNAME:talent_app}
+      "[app_password]": ${DB_APP_PASSWORD:talent_app}
   data:
     web:
       pageable:
