@@ -49,9 +49,16 @@ spring:
         model: ${LLM_MODEL}
         temperature: 0.0
 
+  modulith:
+    events:
+      republish-outstanding-events-on-restart: true
+
 app:
   storage:
     bucket: ${STORAGE_BUCKET:talent-resumes}
+  queue:
+    screening: ${SCREENING_QUEUE:resume-screening}
+    concurrency: ${SCREENING_CONCURRENCY:2}
   github:
     token: ${GITHUB_TOKEN:}
 

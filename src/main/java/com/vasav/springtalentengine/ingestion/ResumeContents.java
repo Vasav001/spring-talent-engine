@@ -18,7 +18,12 @@ public class ResumeContents {
     public Optional<ResumeContent> find(UUID resumeId) {
         return resumeRepository.findById(resumeId)
                 .filter(resume -> resume.getTenantId().equals(TenantContext.require()))
-                .map(resume -> new ResumeContent(resume.getId(), resume.getJobId(), resume.getFileName(),
-                        resume.getText(), resume.getGithubUsername()));
+                .filter(resume -> resume.getText() != null)
+                .map(ResumeContents::toContent);
+    }
+
+    static ResumeContent toContent(Resume resume) {
+        return new ResumeContent(resume.getId(), resume.getJobId(), resume.getFileName(),
+                resume.getText(), resume.getGithubUsername());
     }
 }

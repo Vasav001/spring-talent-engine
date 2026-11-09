@@ -72,7 +72,7 @@ Companies (tenants) upload batches of resumes against a job description. The sys
   - Creating a tenant binds the current transaction to the new tenant (`set_config(..., true)`) so the owner membership passes the insert policy.
   - Integration tests (`TenantIsolationTests`): app runs as `talent_app`; tenant A sees only A's rows; inserting into tenant B fails.
 - **Async workers** set `TenantContext` from the queue message before touching the database.
-- **S3 keys** are prefixed per tenant: `tenants/{tenantId}/batches/{batchId}/{resumeId}.pdf`.
+- **S3 keys** are prefixed per tenant: `tenants/{tenantId}/jobs/{jobId}/{uuid}.pdf`.
 
 ### 3.2 RBAC
 A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to permissions **in code** (a Java enum map), not in DB tables.
@@ -139,11 +139,15 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 4. If extraction fails, the job is still created with an empty rubric; the recruiter retries (`extract-rubric`) or edits manually.
 5. **The recruiter reviews and edits the rubric** (human in the loop), then publishes the job. Only `DRAFT` jobs can change; publishing needs at least one requirement.
 
-### 5.2 Batch upload
-1. `POST /batches` {jobId, fileNames[]} → reserve credits → returns **presigned PUT URLs**.
-2. The browser uploads directly to S3/RustFS.
-3. `POST /batches/{id}/complete` → one queue message per resume `{tenantId, batchId, resumeId}`.
-4. Progress is pushed to the UI over **SSE** (`processed / failed / total`).
+### 5.2 Batch upload (Phase 4)
+1. `POST /jobs/{jobId}/batches` {fileNames[]} (max 50, PDF/DOCX, job must be `PUBLISHED`) → one `batches` row + one `resumes` row per file (`AWAITING_UPLOAD`) → returns a **presigned PUT URL** per file (valid 15 minutes). Credit reservation is added here in Phase 5.
+2. The client uploads each file directly to S3/RustFS (the app never handles the bytes).
+3. `POST /batches/{id}/submit` → checks each object exists in S3 (missing → `FAILED`), marks the rest `QUEUED`, publishes a `BatchSubmitted` event. Row-locked, so a double submit gets 409.
+4. **Transactional outbox:** `BatchSubmitted` is stored in `event_publication` in the same transaction; an `@ApplicationModuleListener` sends one SQS message `{tenantId, resumeId}` per resume after commit. If the app dies before sending, Modulith republishes the event on restart.
+5. **Worker** (`ScreeningWorker`, `@SqsListener`, concurrency from `SCREENING_CONCURRENCY`, default 2 for free-tier rate limits): sets `TenantContext` from the message → downloads the file → same parsing as 5.3 (5 MB limit, text, PII mask, duplicate check by hash) → screening (5.4) → marks the resume `DONE`/`FAILED` and bumps the batch counters.
+6. **Idempotency:** the resume only moves `QUEUED → DONE/FAILED` through a conditional update (`WHERE status = 'QUEUED'`); only the first finish increments the counters, so a redelivered message is a no-op.
+7. **Retries:** permanent problems (unreadable, duplicate, too large) fail at once. Transient errors (LLM, S3) throw → SQS redelivers after the visibility timeout → on the 3rd receive (`ApproximateReceiveCount`) the worker records `FAILED`. The dead-letter queue (maxReceiveCount 3) only catches messages the worker can't even handle.
+8. **Progress over SSE:** `GET /batches/{id}/events` sends a `progress` event (`status, total, processed, failed`) every 2 seconds from the database, on a virtual thread, and closes when the batch is `COMPLETED`. The database is the source of truth, so it works with several app instances.
 
 ### 5.3 Upload (ingestion module, Phase 3: one file per request)
 1. `POST /jobs/{jobId}/resumes` (multipart, PDF/DOCX, max 5 MB); the job must be `PUBLISHED`.
@@ -162,7 +166,7 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
    - If any fail → **one retry** with feedback naming the skills → anything still unsupported gets score 0 and `verified: false`.
 4. **Scores:** `aiScore` = weighted average of criterion scores (0–100); **final score** = `0.3 × keywordScore + 0.7 × aiScore` (constant in `ScreeningOutcome`). `LOW_MATCH` gets `0.3 × keywordScore` so it always ranks below screened candidates.
 5. Save one `screening_results` row per resume (re-screening overwrites it) with the report as `jsonb`, model name and token counts. AI errors → status `FAILED` with a generic message; details go to the log.
-6. From Phase 4: failures retried by the queue → dead-letter queue after 3 attempts → `FAILED`, credit refunded.
+6. Batch path: failures retried by the queue, `FAILED` after 3 attempts (see 5.2). Credit refunds come with Phase 5.
 
 ### 5.5 Agent tool (`@Tool` method; the model decides whether to call it)
 | Tool | Purpose |
@@ -193,8 +197,8 @@ A `normalizeSkill` tool was dropped: synonyms are applied in Java before and aft
 | `skill_synonyms` (global) | alias, canonical |
 | `jobs` | id, tenant_id, title, description, status (DRAFT/PUBLISHED/CLOSED), created_by (email) |
 | `job_requirements` | id, tenant_id, job_id, skill, type (MUST/NICE), weight, min_years |
-| `batches` | id, tenant_id, job_id, total, processed, failed, status, created_by |
-| `resumes` | id, tenant_id, batch_id, file_name, storage_key, content_hash, status (UPLOADED/QUEUED/SCREENED/LOW_MATCH/FAILED), github_username |
+| `batches` | id, tenant_id, job_id, status (AWAITING_UPLOAD/PROCESSING/COMPLETED), total, processed (finished, incl. failed), failed, created_by, completed_at |
+| `resumes` | id, tenant_id, job_id, batch_id (null for single uploads), file_name, storage_key, content_hash, text (masked), status (AWAITING_UPLOAD/QUEUED/DONE/FAILED), error, github_username |
 | `screening_results` | id, tenant_id, resume_id, keyword_score, ai_score, final_score, recommendation, scorecard (jsonb), model, tokens_in, tokens_out |
 | `review_overrides` | id, tenant_id, result_id, reviewer_email, override_score, reason, created_at |
 | `usage_records` | id, tenant_id, resume_id, tokens_in, tokens_out, provider, model, created_at |
@@ -229,8 +233,9 @@ POST   /jobs/{id}/publish                   DRAFT → PUBLISHED
 POST   /jobs/{id}/close                     PUBLISHED → CLOSED
 DELETE /jobs/{id}                           delete draft
 
-POST   /batches                             reserve credits, get presigned URLs
-POST   /batches/{id}/complete               enqueue processing
+POST   /jobs/{id}/batches                   {fileNames} → presigned upload URLs
+POST   /batches/{id}/submit                 enqueue uploaded files
+GET    /batches/{id}                        counts + per-file status/error
 GET    /batches/{id}/events        (SSE)    progress stream
 POST   /jobs/{id}/resumes          (multipart) upload one resume
 POST   /resumes/{id}/screen?force=          screen now (force bypasses the keyword gate)
@@ -258,8 +263,8 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] `compose.yaml`: Postgres, RustFS (+ bucket via AWS CLI init container), ElasticMQ (+ queue and dead-letter queue)
 - [x] `application.yaml` + `local` / `aws` profiles, secrets from environment variables (IntelliJ run config; names listed in `.env.example`)
 - [x] Flyway `V1__event_publication.sql` (Modulith outbox table)
-- [ ] Auth0 tenant + SPA app + API audience
-- [ ] Auth0 post-login Action that puts the verified email into the access token:
+- [x] Auth0 tenant + SPA app + API audience
+- [x] Auth0 post-login Action that puts the verified email into the access token:
   ```js
   exports.onExecutePostLogin = async (event, api) => {
     if (event.user.email_verified) {
@@ -267,7 +272,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
     }
   };
   ```
-- [ ] Free LLM API key (Groq or OpenRouter); confirm the model supports tool calling
+- [x] Free LLM API key (Groq or OpenRouter); confirm the model supports tool calling
 
 ### Phase 1 — Tenancy foundation
 - [x] JWT resource server (email claim as principal), `/me`
@@ -275,14 +280,15 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] RBAC: role → permissions map, `@PreAuthorize` checks (job ownership rule moves to Phase 2)
 - [x] Postgres RLS + non-owner app role + `TenantIsolationTests`
 - [x] `ApplicationModules.verify()` test
-- [ ] Run on the Docker PC: app starts, `TenantIsolationTests` pass, try `/me` and `/tenants` with a real Auth0 token
+- [x] Run on the Docker PC: app starts, `/me` and `/tenants` work with a real Auth0 token
+- [ ] Full test suite (`./mvnw test`) passes on the Docker PC
 
 ### Phase 2 — Jobs & rubric
 - [x] Job CRUD + paged list, RLS on `jobs` and `job_requirements`
 - [x] LLM rubric extraction (structured output)
 - [x] Synonym table (seeded) + normalization, `RubricTests`
 - [x] Rubric edit + publish/close, job ownership rule (`JobAccess`)
-- [ ] Run on the Docker PC: create a job with a real JD, check the extracted rubric, edit, publish
+- [x] Run on the Docker PC: create a job, check the extracted rubric, edit, publish
 
 ### Phase 3 — Single-resume screening (end to end, synchronous)
 - [x] Upload, Tika text extraction + PII masking, file in S3/RustFS, duplicate check
@@ -290,13 +296,14 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] Agent with GitHub tool → `AgentScoreCard`
 - [x] Evidence verification + retry
 - [x] Results API (ranked list + full report), `PiiMaskerTests`, `ScreeningLogicTests`
-- [ ] Run on the Docker PC: upload 3–5 real resumes, screen them, check evidence and ranking
+- [x] Run on the Docker PC: upload, screen, results and report work end to end (simple inputs)
 
 ### Phase 4 — Batch pipeline
-- [ ] Presigned uploads (RustFS)
-- [ ] Queue fan-out (ElasticMQ), configurable concurrency, dead-letter queue
-- [ ] Idempotency + content-hash dedup
-- [ ] SSE progress
+- [x] Presigned uploads (RustFS), `V6__batches.sql`
+- [x] Queue fan-out (ElasticMQ) through the Modulith outbox, configurable concurrency, 3 attempts, dead-letter queue
+- [x] Idempotency (conditional status update) + content-hash dedup
+- [x] SSE progress
+- [ ] Run on the Docker PC: batch of 3–5 files incl. one duplicate and one never uploaded, watch SSE, check results
 
 ### Phase 5 — Billing & BYOK
 - [ ] Plans seed data, FREE subscription created with each new tenant
@@ -310,6 +317,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [ ] Human overrides
 - [ ] Small eval set: ~20 resumes ranked by hand + a JUnit test checking ranking agreement
 - [ ] WireMock-based tests for the AI layer (deterministic fake responses)
+- [ ] Negative API checks: foreign `X-Tenant-Id` → 403, duplicate upload → 409, upload to draft job → 409, `.txt` upload → 415, VIEWER creating a job → 403
 
 ### Phase 7 — AWS demo week
 - [ ] **AWS Budgets alerts at $5 / $15 / $30 before creating anything**
@@ -334,7 +342,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - **Per-tenant RBAC:** roles live in the DB per tenant, permissions in code; one ownership rule for record-level access.
 - **Billing behind an interface:** fake gateway now, Stripe later; payment results handled idempotently through events.
 - **Atomic credit reservation + ledger:** concurrent batch submissions can't overspend, and every credit change is audited.
-- **Queue-based batching:** rate-limit-aware concurrency, retries, dead-letter queue, idempotency.
+- **Queue-based batching:** presigned uploads (no file bytes through the app), transactional outbox (Modulith) → SQS, rate-limit-aware concurrency, retries, dead-letter queue, idempotent worker via a conditional status update.
 - **Portable infrastructure:** S3/SQS APIs with RustFS/ElasticMQ locally — the same code runs on and off AWS.
 - **Model independence + BYOK:** one OpenAI-compatible client, configured per tenant at runtime.
 
