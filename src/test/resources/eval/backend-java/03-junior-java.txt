@@ -1,0 +1,16 @@
+Candidate C
+Graduate Software Engineer
+
+Experience
+Software Engineer Intern, CloudKitchen (Jan 2025 - Jun 2025)
+- Added two endpoints to a Spring Boot service written in Java.
+- Wrote JUnit tests for the menu module.
+
+Projects
+- Library management system: Java, Spring Boot and PostgreSQL, built for a university course.
+
+Education
+B.Tech Computer Science, 2025
+
+Skills
+Java, Spring Boot, PostgreSQL, HTML, CSS

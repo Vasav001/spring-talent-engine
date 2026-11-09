@@ -1,0 +1,11 @@
+Candidate F
+Frontend Developer
+
+Experience
+Frontend Developer, PixelCraft (2021 - present)
+- Build dashboards with React and TypeScript.
+- Improved Lighthouse performance scores from 60 to 95.
+- Write component tests with Jest and Testing Library.
+
+Skills
+React, TypeScript, JavaScript, CSS, Figma, Jest

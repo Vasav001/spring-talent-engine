@@ -141,25 +141,28 @@ class ScreeningService {
     }
 
     record ResultSummary(UUID id, UUID resumeId, String fileName, ScreeningStatus status, int keywordScore,
-                         Integer aiScore, int finalScore, Recommendation recommendation, Instant screenedAt) {
+                         Integer aiScore, int finalScore, Integer overrideScore, int rankScore,
+                         Recommendation recommendation, Instant screenedAt) {
 
         static ResultSummary from(ScreeningResult result) {
             return new ResultSummary(result.getId(), result.getResumeId(), result.getFileName(), result.getStatus(),
-                    result.getKeywordScore(), result.getAiScore(), result.getFinalScore(), result.getRecommendation(),
-                    result.getScreenedAt());
+                    result.getKeywordScore(), result.getAiScore(), result.getFinalScore(), result.getOverrideScore(),
+                    result.getRankScore(), result.getRecommendation(), result.getScreenedAt());
         }
     }
 
     record ScreeningDetails(UUID id, UUID resumeId, UUID jobId, String fileName, ScreeningStatus status,
                             int keywordScore, Integer aiScore, int finalScore, Recommendation recommendation,
                             ScreeningReport report, String error, String model, int tokensIn, int tokensOut,
-                            Instant screenedAt) {
+                            Instant screenedAt, Integer overrideScore, String overrideReason, String overriddenBy,
+                            Instant overriddenAt, int rankScore) {
 
         static ScreeningDetails from(ScreeningResult result) {
             return new ScreeningDetails(result.getId(), result.getResumeId(), result.getJobId(), result.getFileName(),
                     result.getStatus(), result.getKeywordScore(), result.getAiScore(), result.getFinalScore(),
                     result.getRecommendation(), result.getReport(), result.getError(), result.getModel(),
-                    result.getTokensIn(), result.getTokensOut(), result.getScreenedAt());
+                    result.getTokensIn(), result.getTokensOut(), result.getScreenedAt(), result.getOverrideScore(),
+                    result.getOverrideReason(), result.getOverriddenBy(), result.getOverriddenAt(), result.getRankScore());
         }
     }
 

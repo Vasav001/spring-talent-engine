@@ -59,6 +59,16 @@ class ScreeningResult {
 
     private Instant screenedAt;
 
+    private Integer overrideScore;
+
+    private String overrideReason;
+
+    private String overriddenBy;
+
+    private Instant overriddenAt;
+
+    private int rankScore;
+
     ScreeningResult(UUID tenantId, UUID resumeId, UUID jobId, String fileName) {
         this.tenantId = tenantId;
         this.resumeId = resumeId;
@@ -78,5 +88,26 @@ class ScreeningResult {
         this.tokensIn = outcome.tokensIn();
         this.tokensOut = outcome.tokensOut();
         this.screenedAt = Instant.now();
+        updateRankScore();
+    }
+
+    void override(int score, String reason, String reviewerEmail) {
+        this.overrideScore = score;
+        this.overrideReason = reason;
+        this.overriddenBy = reviewerEmail;
+        this.overriddenAt = Instant.now();
+        updateRankScore();
+    }
+
+    void clearOverride() {
+        this.overrideScore = null;
+        this.overrideReason = null;
+        this.overriddenBy = null;
+        this.overriddenAt = null;
+        updateRankScore();
+    }
+
+    private void updateRankScore() {
+        this.rankScore = overrideScore == null ? finalScore : overrideScore;
     }
 }

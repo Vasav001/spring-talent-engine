@@ -1,0 +1,17 @@
+Candidate A
+Senior Backend Engineer
+
+Experience
+Senior Backend Engineer, FinPay (2021 - present)
+- Lead developer for the payments platform written in Java 17 and Spring Boot 3.
+- Designed PostgreSQL schemas and tuned slow queries, cutting p95 latency by 40%.
+- Moved 30 services to Kubernetes (EKS) and wrote Helm charts.
+- Built event-driven settlement with Kafka, processing 2 million events per day.
+- Ran the services on AWS (EKS, RDS, S3, SQS).
+
+Backend Engineer, ShopLine (2018 - 2021)
+- Built REST APIs in Java 11 and Spring Boot for the order service.
+- Maintained PostgreSQL databases and Flyway migrations.
+
+Skills
+Java, Spring Boot, PostgreSQL, Kubernetes, Kafka, AWS, Docker, JUnit

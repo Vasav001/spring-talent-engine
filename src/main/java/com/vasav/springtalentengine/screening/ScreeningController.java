@@ -33,7 +33,7 @@ class ScreeningController {
     @PreAuthorize("hasAuthority('RESULT_READ')")
     public Page<ResultSummary> results(@PathVariable UUID jobId,
                                        @RequestParam(required = false) ScreeningStatus status,
-                                       @PageableDefault(size = 20, sort = "finalScore", direction = Sort.Direction.DESC) Pageable pageable) {
+                                       @PageableDefault(size = 20, sort = "rankScore", direction = Sort.Direction.DESC) Pageable pageable) {
         return screeningService.results(jobId, status, pageable);
     }
 

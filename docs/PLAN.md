@@ -40,8 +40,7 @@ Companies (tenants) upload batches of resumes against a job description. The sys
 | `billing` | Plans, subscriptions, fake payments, credit balance + ledger |
 | `jobs` | Job descriptions, rubric extraction, rubric editing |
 | `ingestion` | Batches, presigned uploads, text extraction, enqueueing work |
-| `screening` | Keyword gate, AI agent, output verification, scoring |
-| `review` | Ranked results, human overrides |
+| `screening` | Keyword gate, AI agent, output verification, scoring, ranked results, human overrides, usage |
 | `shared` | Tenant context holder, common types, error handling |
 
 ### Infrastructure (one code path, endpoint swapped by profile)
@@ -200,7 +199,7 @@ A `normalizeSkill` tool was dropped: synonyms are applied in Java before and aft
 | `batches` | id, tenant_id, job_id, status (AWAITING_UPLOAD/PROCESSING/COMPLETED), total, processed (finished, incl. failed), failed, created_by, completed_at |
 | `resumes` | id, tenant_id, job_id, batch_id (null for single uploads), file_name, storage_key, content_hash, text (masked), status (AWAITING_UPLOAD/QUEUED/DONE/FAILED), error, github_username |
 | `screening_results` | id, tenant_id, resume_id, keyword_score, ai_score, final_score, recommendation, scorecard (jsonb), model, tokens_in, tokens_out |
-| `review_overrides` | id, tenant_id, result_id, reviewer_email, override_score, reason, created_at |
+| `score_overrides` (append-only history) | id, tenant_id, result_id, previous_score, new_score (null = cleared), reason, reviewer_email, created_at |
 | `event_publication` | managed by Spring Modulith (transactional outbox) |
 
 Schema managed by Flyway migrations.
@@ -242,7 +241,9 @@ POST   /jobs/{id}/resumes          (multipart) upload one resume
 POST   /resumes/{id}/screen?force=          screen now (force bypasses the keyword gate)
 GET    /jobs/{id}/results?status=&page=     ranked candidates (final score, highest first)
 GET    /results/{id}                        full report with evidence
-POST   /results/{id}/override               human override
+PUT    /results/{id}/override               {score 0-100, reason} human override (RECRUITER/OWNER)
+DELETE /results/{id}/override               back to the computed score
+GET    /results/{id}/overrides              override history
 ```
 
 ---
@@ -266,7 +267,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 ### Phase 0 — Setup
 - [x] Repo `spring-talent-engine`, Maven project generated (Boot 4.0.9, base package `com.vasav.springtalentengine`)
 - [x] Align `pom.xml` with section 12 (removed Spring Batch, added Spring Cloud AWS S3/SQS)
-- [ ] Add test dependencies when needed (WireMock, Awaitility, LocalStack)
+- [ ] Add test dependencies when needed (Awaitility, LocalStack)
 - [x] Package-per-module layout + `ModularityTests`
 - [x] `compose.yaml`: Postgres, RustFS (+ bucket via AWS CLI init container), ElasticMQ (+ queue and dead-letter queue)
 - [x] `application.yaml` + `local` / `aws` profiles, secrets from environment variables (IntelliJ run config; names listed in `.env.example`)
@@ -323,9 +324,11 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [ ] Run on the Docker PC: subscription, checkout success/failure, batch reservation + refunds in the ledger, 402 when out of credits, BYOK with a real key
 
 ### Phase 6 — Review & quality
-- [ ] Human overrides
-- [ ] Small eval set: ~20 resumes ranked by hand + a JUnit test checking ranking agreement
-- [ ] WireMock-based tests for the AI layer (deterministic fake responses)
+- [x] Human overrides: `PUT/DELETE /results/{id}/override`, history in `score_overrides`, ranking by `rank_score` (`V8__score_overrides.sql`). Lives in `screening`; the empty `review` module was removed.
+- [x] AI layer tests with a scripted `ChatModel` (`ScreeningAgentTests`): one call, retry with feedback, zeroing unsupported evidence, non-JSON reply. No network, no WireMock.
+- [x] Eval harness: `src/test/resources/eval/backend-java/` (file name prefix = hand rank), `ScreeningEvalTests` (runs only when `LLM_API_KEY` is set, real model, pass if pairwise agreement >= 0.8), `RankingAgreementTests`
+- [ ] Grow the eval set from 6 synthetic resumes to ~20 (anonymized real ones), run it on the Docker PC and record the agreement score
+- [ ] Run overrides on the Docker PC: override, ranking order changes, clear, history
 - [ ] Negative API checks: foreign `X-Tenant-Id` → 403, duplicate upload → 409, upload to draft job → 409, `.txt` upload → 415, VIEWER creating a job → 403
 
 ### Phase 7 — AWS demo week
@@ -346,6 +349,8 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 ## 10. Interview talking points
 
 - **Single agent + verification in code** instead of multi-agent: cheaper, testable, deterministic checks.
+- **Testing an LLM feature:** deterministic unit tests with a scripted `ChatModel` (retry and verification logic), plus a separate eval against the real model that measures pairwise ranking agreement with a human ranking. Tests check the code; the eval checks the model + prompt.
+- **Human in the loop:** recruiters override scores with a required reason; the ranking uses the override, the computed score stays visible, and every change is kept in an append-only history.
 - **Keyword gate + LLM:** keywords are cheap and explainable; the LLM handles context. The gate saves quota.
 - **Defense-in-depth tenancy:** app-level `tenant_id` + Postgres RLS (transaction-scoped setting) + per-tenant S3 prefixes.
 - **Per-tenant RBAC:** roles live in the DB per tenant, permissions in code; one ownership rule for record-level access.
@@ -387,7 +392,6 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 | `org.springframework.modulith:spring-modulith-bom` | **2.0.8** | BOM import (the line for Boot 4.0.x) |
 | `io.awspring.cloud:spring-cloud-aws-dependencies` | **4.2.1** | BOM import (4.x = Spring Cloud 2025.1 / Boot 4.0.x) |
 | `org.springdoc:springdoc-openapi-starter-webmvc-ui` | **3.0.3** | Direct dependency (the line for Boot 4.0.x) |
-| `org.wiremock:wiremock-standalone` | **3.13.2** | Direct dependency, test scope (latest stable 3.x) |
 
 Everything else gets its version from a BOM — no version tag needed:
 - **Spring Boot manages:** all `spring-boot-starter-*`, `postgresql` (42.7.14), `flyway-database-postgresql` (Flyway 11.14.1), `testcontainers-*` (2.0.5), `awaitility` (4.3.0), `lombok`.
@@ -423,7 +427,6 @@ Everything else gets its version from a BOM — no version tag needed:
 | `spring-modulith-starter-test` | `ApplicationModules.verify()`, scenario tests |
 | `spring-boot-testcontainers` | `@ServiceConnection` |
 | `testcontainers-junit-jupiter`, `testcontainers-postgresql`, `testcontainers-localstack` | Real Postgres (RLS tests), S3/SQS |
-| `org.wiremock:wiremock-standalone:3.13.2` | Fake LLM HTTP responses |
 | `org.awaitility:awaitility` | Assert async queue processing |
 
 ### Local infrastructure (`compose.yaml`)

@@ -1,0 +1,11 @@
+Candidate E
+Backend Engineer
+
+Experience
+Backend Engineer, RideNow (2019 - present)
+- Build APIs with Python and Django REST Framework.
+- Design PostgreSQL schemas and write data migrations.
+- Deploy services on AWS Lambda and ECS.
+
+Skills
+Python, Django, PostgreSQL, AWS, Redis, Celery

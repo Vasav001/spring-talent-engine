@@ -1,0 +1,13 @@
+Candidate D
+Digital Marketing Specialist
+
+Experience
+Marketing Specialist, BrightAds (2019 - present)
+- Plan social media campaigns and manage a monthly ad budget.
+- Write landing page copy and run A/B tests on email campaigns.
+
+Courses
+- Online course: Introduction to Programming
+
+Skills
+Java, Spring Boot, PostgreSQL, Kubernetes, Kafka, AWS, SEO, Google Ads, Canva
