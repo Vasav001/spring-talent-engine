@@ -3,6 +3,7 @@ package com.vasav.springtalentengine.tenant;
 import com.vasav.springtalentengine.shared.TenantContext;
 import com.vasav.springtalentengine.shared.TenantSession;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -26,6 +27,7 @@ public class TenantService {
     private final TenantRepository tenantRepository;
     private final TenantMemberRepository memberRepository;
     private final TenantSession tenantSession;
+    private final ApplicationEventPublisher events;
 
     public Optional<MemberRole> findRole(UUID tenantId, String email) {
         return memberRepository.findByTenantIdAndEmail(tenantId, email).map(TenantMember::getRole);
@@ -46,6 +48,7 @@ public class TenantService {
         Tenant tenant = tenantRepository.save(new Tenant(name));
         tenantSession.bindCurrentTransaction(tenant.getId());
         memberRepository.save(new TenantMember(tenant.getId(), ownerEmail, MemberRole.OWNER));
+        events.publishEvent(new TenantCreated(tenant.getId()));
         return new Membership(tenant.getId(), tenant.getName(), MemberRole.OWNER);
     }
 

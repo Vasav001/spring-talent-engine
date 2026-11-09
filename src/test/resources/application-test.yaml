@@ -21,3 +21,7 @@ spring:
       sqs:
         listener:
           auto-startup: false
+
+app:
+  byok:
+    master-key: test-master-key

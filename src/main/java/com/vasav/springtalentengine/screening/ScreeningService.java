@@ -1,5 +1,8 @@
 package com.vasav.springtalentengine.screening;
 
+import com.vasav.springtalentengine.billing.CreditBalance;
+import com.vasav.springtalentengine.billing.Credits;
+import com.vasav.springtalentengine.billing.Plan;
 import com.vasav.springtalentengine.ingestion.ResumeContent;
 import com.vasav.springtalentengine.ingestion.ResumeContents;
 import com.vasav.springtalentengine.ingestion.ResumeProcessing;
@@ -8,9 +11,11 @@ import com.vasav.springtalentengine.jobs.JobRubric;
 import com.vasav.springtalentengine.jobs.JobRubrics;
 import com.vasav.springtalentengine.jobs.SkillSynonyms;
 import com.vasav.springtalentengine.screening.KeywordGate.KeywordMatch;
+import com.vasav.springtalentengine.screening.ScreeningResultRepository.TokenTotals;
 import com.vasav.springtalentengine.shared.TenantContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -34,6 +39,8 @@ class ScreeningService {
     private final JobRubrics jobRubrics;
     private final SkillSynonyms skillSynonyms;
     private final ScreeningAgent screeningAgent;
+    private final TenantChatClients chatClients;
+    private final Credits credits;
     private final TransactionTemplate transactionTemplate;
 
     ScreeningDetails screen(UUID resumeId, boolean force) {
@@ -41,7 +48,18 @@ class ScreeningService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Resume not found"));
         JobRubric rubric = jobRubrics.find(resume.jobId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found"));
-        return save(resume, evaluate(rubric, resume, force, true));
+        KeywordMatch keywords = keywords(rubric, resume);
+        if (!keywords.passes() && !force) {
+            return save(resume, ScreeningOutcome.lowMatch(keywords));
+        }
+        ChatClient chatClient = chatClients.current()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, TenantChatClients.MISSING_SETTINGS));
+        credits.reserveForResume(resumeId);
+        ScreeningOutcome outcome = runAgent(chatClient, rubric, resume, keywords, true);
+        if (outcome.status() == ScreeningStatus.FAILED) {
+            credits.refund(null, resumeId);
+        }
+        return save(resume, outcome);
     }
 
     void screenQueued(UUID resumeId, boolean lastAttempt) {
@@ -52,18 +70,30 @@ class ScreeningService {
             }
             JobRubric rubric = jobRubrics.find(resume.get().jobId())
                     .orElseThrow(() -> new ResumeRejectedException("Job not found"));
-            ScreeningOutcome outcome = evaluate(rubric, resume.get(), false, lastAttempt);
+            KeywordMatch keywords = keywords(rubric, resume.get());
+            ScreeningOutcome outcome = keywords.passes()
+                    ? runAgent(chatClients.current().orElseThrow(() -> new ResumeRejectedException(TenantChatClients.MISSING_SETTINGS)),
+                            rubric, resume.get(), keywords, lastAttempt)
+                    : ScreeningOutcome.lowMatch(keywords);
             save(resume.get(), outcome);
-            resumeProcessing.finish(resumeId, outcome.error());
+            resumeProcessing.finish(resumeId, outcome.error(), outcome.status() != ScreeningStatus.SCREENED);
         } catch (ResumeRejectedException e) {
-            resumeProcessing.finish(resumeId, e.getMessage());
+            resumeProcessing.finish(resumeId, e.getMessage(), true);
         } catch (RuntimeException e) {
             if (!lastAttempt) {
                 throw e;
             }
             log.warn("Giving up on resume {}", resumeId, e);
-            resumeProcessing.finish(resumeId, "Processing failed after several attempts");
+            resumeProcessing.finish(resumeId, "Processing failed after several attempts", true);
         }
+    }
+
+    @Transactional
+    UsageDetails usage() {
+        CreditBalance balance = credits.balance();
+        TokenTotals totals = resultRepository.totalsSince(TenantContext.require(), ScreeningStatus.SCREENED, balance.periodStart());
+        return new UsageDetails(balance.plan(), balance.creditsRemaining(), balance.periodStart(), balance.periodEnd(),
+                totals.getScreened(), totals.getTokensIn(), totals.getTokensOut());
     }
 
     @Transactional(readOnly = true)
@@ -83,13 +113,14 @@ class ScreeningService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Result not found"));
     }
 
-    private ScreeningOutcome evaluate(JobRubric rubric, ResumeContent resume, boolean force, boolean recordFailures) {
-        KeywordMatch keywords = KeywordGate.evaluate(rubric.items(), resume.text(), skillSynonyms.load());
-        if (!keywords.passes() && !force) {
-            return ScreeningOutcome.lowMatch(keywords);
-        }
+    private KeywordMatch keywords(JobRubric rubric, ResumeContent resume) {
+        return KeywordGate.evaluate(rubric.items(), resume.text(), skillSynonyms.load());
+    }
+
+    private ScreeningOutcome runAgent(ChatClient chatClient, JobRubric rubric, ResumeContent resume, KeywordMatch keywords,
+                                      boolean recordFailures) {
         try {
-            return ScreeningOutcome.screened(keywords, rubric.items(), screeningAgent.screen(rubric, resume));
+            return ScreeningOutcome.screened(keywords, rubric.items(), screeningAgent.screen(chatClient, rubric, resume));
         } catch (RuntimeException e) {
             if (!recordFailures) {
                 throw e;
@@ -130,5 +161,9 @@ class ScreeningService {
                     result.getRecommendation(), result.getReport(), result.getError(), result.getModel(),
                     result.getTokensIn(), result.getTokensOut(), result.getScreenedAt());
         }
+    }
+
+    record UsageDetails(Plan plan, Integer creditsRemaining, Instant periodStart, Instant periodEnd,
+                        long screened, long tokensIn, long tokensOut) {
     }
 }

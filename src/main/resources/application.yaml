@@ -61,6 +61,9 @@ app:
     concurrency: ${SCREENING_CONCURRENCY:2}
   github:
     token: ${GITHUB_TOKEN:}
+  byok:
+    master-key: ${BYOK_MASTER_KEY}
+    salt: ${BYOK_SALT:8f3c2a7d5e1b9046}
 
 management:
   endpoints:

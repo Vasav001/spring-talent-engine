@@ -37,21 +37,19 @@ class ScreeningAgent {
             {feedback}
             """;
 
-    private final ChatClient chatClient;
     private final GithubTool githubTool;
 
-    ScreeningAgent(ChatClient.Builder chatClientBuilder, GithubTool githubTool) {
-        this.chatClient = chatClientBuilder.build();
+    ScreeningAgent(GithubTool githubTool) {
         this.githubTool = githubTool;
     }
 
-    AgentResult screen(JobRubric rubric, ResumeContent resume) {
-        Attempt first = ask(rubric, resume, "");
+    AgentResult screen(ChatClient chatClient, JobRubric rubric, ResumeContent resume) {
+        Attempt first = ask(chatClient, rubric, resume, "");
         Verification verification = ScoreCardVerifier.verify(first.card(), rubric.items(), resume.text());
         if (verification.unsupportedSkills().isEmpty()) {
             return new AgentResult(first.card(), verification, first.model(), first.tokensIn(), first.tokensOut());
         }
-        Attempt retry = ask(rubric, resume, feedback(verification.unsupportedSkills()));
+        Attempt retry = ask(chatClient, rubric, resume, feedback(verification.unsupportedSkills()));
         return new AgentResult(retry.card(),
                 ScoreCardVerifier.verify(retry.card(), rubric.items(), resume.text()),
                 retry.model(),
@@ -59,7 +57,7 @@ class ScreeningAgent {
                 first.tokensOut() + retry.tokensOut());
     }
 
-    private Attempt ask(JobRubric rubric, ResumeContent resume, String feedback) {
+    private Attempt ask(ChatClient chatClient, JobRubric rubric, ResumeContent resume, String feedback) {
         ResponseEntity<ChatResponse, AgentScoreCard> response = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
                 .user(user -> user.text(USER_PROMPT)

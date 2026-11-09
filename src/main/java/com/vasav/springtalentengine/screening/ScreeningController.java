@@ -2,6 +2,7 @@ package com.vasav.springtalentengine.screening;
 
 import com.vasav.springtalentengine.screening.ScreeningService.ResultSummary;
 import com.vasav.springtalentengine.screening.ScreeningService.ScreeningDetails;
+import com.vasav.springtalentengine.screening.ScreeningService.UsageDetails;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -34,6 +35,12 @@ class ScreeningController {
                                        @RequestParam(required = false) ScreeningStatus status,
                                        @PageableDefault(size = 20, sort = "finalScore", direction = Sort.Direction.DESC) Pageable pageable) {
         return screeningService.results(jobId, status, pageable);
+    }
+
+    @GetMapping("/usage")
+    @PreAuthorize("hasAuthority('RESULT_READ')")
+    public UsageDetails usage() {
+        return screeningService.usage();
     }
 
     @GetMapping("/results/{resultId}")

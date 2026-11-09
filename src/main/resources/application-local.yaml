@@ -11,3 +11,7 @@ spring:
         path-style-access-enabled: true
       sqs:
         endpoint: http://localhost:9324
+
+app:
+  byok:
+    master-key: ${BYOK_MASTER_KEY:local-dev-only-master-key}

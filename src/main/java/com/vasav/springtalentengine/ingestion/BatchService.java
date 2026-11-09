@@ -1,5 +1,6 @@
 package com.vasav.springtalentengine.ingestion;
 
+import com.vasav.springtalentengine.billing.Credits;
 import com.vasav.springtalentengine.jobs.JobRubrics;
 import com.vasav.springtalentengine.shared.CurrentUser;
 import com.vasav.springtalentengine.shared.TenantContext;
@@ -29,6 +30,7 @@ class BatchService {
     private final ResumeRepository resumeRepository;
     private final ResumeStorage storage;
     private final JobRubrics jobRubrics;
+    private final Credits credits;
     private final ApplicationEventPublisher events;
     private final TransactionTemplate transactionTemplate;
 
@@ -89,6 +91,7 @@ class BatchService {
                     .toList();
             batch.submit(resumes.size() - queued.size());
             if (!queued.isEmpty()) {
+                credits.reserveForBatch(batchId, queued.size());
                 events.publishEvent(new BatchSubmitted(tenantId, batchId, queued));
             }
             return BatchDetails.from(batch, resumes);

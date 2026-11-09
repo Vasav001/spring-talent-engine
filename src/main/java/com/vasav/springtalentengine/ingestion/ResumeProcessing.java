@@ -1,5 +1,6 @@
 package com.vasav.springtalentengine.ingestion;
 
+import com.vasav.springtalentengine.billing.Credits;
 import com.vasav.springtalentengine.shared.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -17,6 +18,7 @@ public class ResumeProcessing {
     private final BatchRepository batchRepository;
     private final ResumeStorage storage;
     private final ResumeParser parser;
+    private final Credits credits;
 
     public Optional<ResumeContent> prepare(UUID resumeId) {
         Optional<Resume> queued = resumeRepository.findById(resumeId)
@@ -43,12 +45,15 @@ public class ResumeProcessing {
     }
 
     @Transactional
-    public void finish(UUID resumeId, String error) {
+    public void finish(UUID resumeId, String error, boolean refundCredit) {
         resumeRepository.findById(resumeId).ifPresent(resume -> {
             ResumeStatus status = error == null ? ResumeStatus.DONE : ResumeStatus.FAILED;
             boolean firstFinish = resumeRepository.finishQueued(resumeId, status, error) == 1;
             if (firstFinish && resume.getBatchId() != null) {
                 batchRepository.recordProgress(resume.getBatchId(), error == null ? 0 : 1);
+                if (refundCredit) {
+                    credits.refund(resume.getBatchId(), resumeId);
+                }
             }
         });
     }

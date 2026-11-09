@@ -42,7 +42,6 @@ Companies (tenants) upload batches of resumes against a job description. The sys
 | `ingestion` | Batches, presigned uploads, text extraction, enqueueing work |
 | `screening` | Keyword gate, AI agent, output verification, scoring |
 | `review` | Ranked results, human overrides |
-| `usage` | Token usage tracking, usage dashboard data |
 | `shared` | Tenant context holder, common types, error handling |
 
 ### Infrastructure (one code path, endpoint swapped by profile)
@@ -95,7 +94,7 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 
 ## 4. Billing: plans, subscriptions, fake payments, credits
 
-### 4.1 Plans (seed data)
+### 4.1 Plans (a Java enum, not a table: they only change with a deploy)
 | Plan | Price / month | Credits / month | LLM key |
 |---|---|---|---|
 | FREE | $0 | 50 | Platform key |
@@ -105,28 +104,30 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 1 credit = 1 resume screened by the AI. Resumes stopped by the keyword gate are free.
 
 ### 4.2 Subscriptions
-- One subscription per tenant. Every new tenant starts on FREE.
-- The OWNER picks a plan → paid plans go through fake checkout → on success the plan is active for **30 days** with fresh credits.
-- **No scheduler, no auto-renewal.** Whenever the subscription is read and its 30 days are over:
-  - FREE → start a new 30-day period and reset credits.
-  - Paid plan → fall back to FREE (the owner buys again to continue).
-- No cancel/downgrade flows and no proration — picking FREE is the downgrade.
+- One subscription per tenant. Every new tenant starts on FREE: `TenantService` publishes `TenantCreated`, and billing creates the subscription in a synchronous `@EventListener` inside the same transaction (tenant and subscription are created together or not at all). Migration `V7` gives existing tenants a FREE subscription.
+- The OWNER picks a paid plan → fake checkout → on success the plan is active for **30 days** with fresh credits (credits are replaced, not added).
+- **No scheduler, no auto-renewal.** Whenever the subscription is read (row-locked) and its 30 days are over, it switches to a fresh FREE period: FREE renews, paid plans fall back to FREE.
+- No cancel/downgrade/proration. Checkout for FREE is rejected; FREE comes back automatically when a paid plan ends.
 
 ### 4.3 Fake payments
-- `PaymentGateway` interface → `FakePaymentGateway` implementation (Stripe test mode can be a second implementation later).
-- Checkout → a fake payment page with **"Simulate success"** / **"Simulate failure"** buttons. No card fields.
-- The result is handled like a webhook: idempotent by payment id → publishes `PaymentSucceeded` / `PaymentFailed` events → billing activates the plan and grants credits.
+- `PaymentGateway` interface → `FakePaymentGateway` (Stripe test mode can be a second implementation later).
+- `POST /billing/checkout {plan}` creates a `PENDING` payment and returns a checkout URL; `POST /billing/fake-gateway/{paymentId} {result: SUCCESS|FAILURE}` plays the role of the provider webhook.
+- **Idempotent:** the payment row is locked and only a `PENDING` payment changes; replaying the call returns the same result and never grants credits twice. On success billing activates the plan directly in the same transaction (no events needed inside one module).
 
 ### 4.4 Credits
-- Balance column `subscriptions.credits_remaining` + append-only `credit_ledger` (`GRANT / RESERVE / REFUND`), both written in the same transaction.
-- **Atomic reservation** when a batch is submitted:
-  `UPDATE subscriptions SET credits_remaining = credits_remaining - :n WHERE tenant_id = :id AND credits_remaining >= :n` → 0 rows updated means reject the batch.
-  Credits are refunded for gated or failed resumes. BYOK skips reservation.
+- Balance column `subscriptions.credits_remaining` (null = unlimited) + append-only `credit_ledger` (`GRANT +n / RESERVE -n / REFUND +1`), both written in the same transaction.
+- **Atomic reservation:** `SELECT ... FOR UPDATE` on the subscription row, check, decrement. Concurrent submissions wait on the row lock, so they can't overspend. Not enough credits → **402**.
+  - Batch: reserved at `submit` for the files that were actually uploaded; the submit transaction rolls back if credits are short.
+  - Single screening: 1 credit reserved only when the AI will run (keyword gate passed or `force`).
+- **Refunds:** 1 credit per resume that did not use the AI (LOW_MATCH, FAILED, rejected file). In the batch path the refund happens only on the first `QUEUED → DONE/FAILED` transition, so redelivered messages can't refund twice.
+- BYOK: no reservation and no refunds.
 
 ### 4.5 BYOK
-- **BYOK security:** AES-GCM encryption at rest (`spring-security-crypto`, master key from an environment variable), never logged, and the UI shows only the last 4 characters.
-- **Per-tenant `ChatClient`:** built at runtime from the tenant's base URL, key and model; cached per tenant and evicted when settings change.
-- Tokens in/out are recorded for every call (taken from the Spring AI response metadata) and shown on the usage page, but they are not billed.
+- `PUT /tenants/llm-settings {baseUrl, model, apiKey}` (OWNER). The key is encrypted with AES-GCM (`Encryptors.delux`, master key from `BYOK_MASTER_KEY`), responses show only `****` + last 4, and `toString()` of the request and connection records masks the key so it can't end up in logs.
+- **SSRF guard:** the base URL must be `https` with a public host name (no `localhost`, no IP literals such as `169.254.169.254`), because the server calls this URL.
+- **Per-tenant `ChatClient`:** when the plan is BYOK, screening builds an `OpenAiChatModel` from the tenant settings and caches it per tenant; the cache entry is rebuilt when `updated_at` changes. BYOK plan without settings → 409 (single) or `FAILED` with a clear message (batch).
+- BYOK covers screening (almost all tokens). Rubric extraction stays on the platform key.
+- Tokens in/out are stored per result and summed on `GET /usage` for the current period (latest result per resume, so a re-screen replaces the old numbers); they are not billed.
 
 ---
 
@@ -140,9 +141,9 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 5. **The recruiter reviews and edits the rubric** (human in the loop), then publishes the job. Only `DRAFT` jobs can change; publishing needs at least one requirement.
 
 ### 5.2 Batch upload (Phase 4)
-1. `POST /jobs/{jobId}/batches` {fileNames[]} (max 50, PDF/DOCX, job must be `PUBLISHED`) → one `batches` row + one `resumes` row per file (`AWAITING_UPLOAD`) → returns a **presigned PUT URL** per file (valid 15 minutes). Credit reservation is added here in Phase 5.
+1. `POST /jobs/{jobId}/batches` {fileNames[]} (max 50, PDF/DOCX, job must be `PUBLISHED`) → one `batches` row + one `resumes` row per file (`AWAITING_UPLOAD`) → returns a **presigned PUT URL** per file (valid 15 minutes).
 2. The client uploads each file directly to S3/RustFS (the app never handles the bytes).
-3. `POST /batches/{id}/submit` → checks each object exists in S3 (missing → `FAILED`), marks the rest `QUEUED`, publishes a `BatchSubmitted` event. Row-locked, so a double submit gets 409.
+3. `POST /batches/{id}/submit` → checks each object exists in S3 (missing → `FAILED`), marks the rest `QUEUED`, reserves one credit per queued file (402 if short), publishes a `BatchSubmitted` event. Row-locked, so a double submit gets 409.
 4. **Transactional outbox:** `BatchSubmitted` is stored in `event_publication` in the same transaction; an `@ApplicationModuleListener` sends one SQS message `{tenantId, resumeId}` per resume after commit. If the app dies before sending, Modulith republishes the event on restart.
 5. **Worker** (`ScreeningWorker`, `@SqsListener`, concurrency from `SCREENING_CONCURRENCY`, default 2 for free-tier rate limits): sets `TenantContext` from the message → downloads the file → same parsing as 5.3 (5 MB limit, text, PII mask, duplicate check by hash) → screening (5.4) → marks the resume `DONE`/`FAILED` and bumps the batch counters.
 6. **Idempotency:** the resume only moves `QUEUED → DONE/FAILED` through a conditional update (`WHERE status = 'QUEUED'`); only the first finish increments the counters, so a redelivered message is a no-op.
@@ -166,7 +167,7 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
    - If any fail → **one retry** with feedback naming the skills → anything still unsupported gets score 0 and `verified: false`.
 4. **Scores:** `aiScore` = weighted average of criterion scores (0–100); **final score** = `0.3 × keywordScore + 0.7 × aiScore` (constant in `ScreeningOutcome`). `LOW_MATCH` gets `0.3 × keywordScore` so it always ranks below screened candidates.
 5. Save one `screening_results` row per resume (re-screening overwrites it) with the report as `jsonb`, model name and token counts. AI errors → status `FAILED` with a generic message; details go to the log.
-6. Batch path: failures retried by the queue, `FAILED` after 3 attempts (see 5.2). Credit refunds come with Phase 5.
+6. Batch path: failures retried by the queue, `FAILED` after 3 attempts (see 5.2); credit refunded when the AI wasn't used (see 4.4).
 
 ### 5.5 Agent tool (`@Tool` method; the model decides whether to call it)
 | Tool | Purpose |
@@ -189,11 +190,10 @@ A `normalizeSkill` tool was dropped: synonyms are applied in Java before and aft
 |---|---|
 | `tenants` | id, name, created_at |
 | `tenant_members` | id, tenant_id, email, role (OWNER/RECRUITER/VIEWER), created_at — unique (tenant_id, email) |
-| `plans` (global, seeded) | code, name, monthly_price, monthly_credits (null = unlimited), byok |
-| `subscriptions` | id, tenant_id, plan_code, period_start, period_end, credits_remaining |
-| `payments` | id, tenant_id, subscription_id, plan_code, amount, currency, status (PENDING/SUCCEEDED/FAILED), provider (FAKE), created_at |
-| `credit_ledger` | id, tenant_id, type (GRANT/RESERVE/REFUND), amount, batch_id, resume_id, created_at |
-| `tenant_llm_settings` | tenant_id, base_url, model, api_key_encrypted, api_key_last4 |
+| `subscriptions` | id, tenant_id (unique), plan (FREE/PRO/BYOK), period_start, period_end, credits_remaining (null = unlimited) |
+| `payments` | id, tenant_id, plan, amount_usd, status (PENDING/SUCCEEDED/FAILED), provider (FAKE), created_by, created_at, completed_at |
+| `credit_ledger` | id, tenant_id, type (GRANT/RESERVE/REFUND), amount (signed), batch_id, resume_id, note, created_at |
+| `tenant_llm_settings` | tenant_id (PK), base_url, model, api_key_encrypted, api_key_last4, updated_at |
 | `skill_synonyms` (global) | alias, canonical |
 | `jobs` | id, tenant_id, title, description, status (DRAFT/PUBLISHED/CLOSED), created_by (email) |
 | `job_requirements` | id, tenant_id, job_id, skill, type (MUST/NICE), weight, min_years |
@@ -201,7 +201,6 @@ A `normalizeSkill` tool was dropped: synonyms are applied in Java before and aft
 | `resumes` | id, tenant_id, job_id, batch_id (null for single uploads), file_name, storage_key, content_hash, text (masked), status (AWAITING_UPLOAD/QUEUED/DONE/FAILED), error, github_username |
 | `screening_results` | id, tenant_id, resume_id, keyword_score, ai_score, final_score, recommendation, scorecard (jsonb), model, tokens_in, tokens_out |
 | `review_overrides` | id, tenant_id, result_id, reviewer_email, override_score, reason, created_at |
-| `usage_records` | id, tenant_id, resume_id, tokens_in, tokens_out, provider, model, created_at |
 | `event_publication` | managed by Spring Modulith (transactional outbox) |
 
 Schema managed by Flyway migrations.
@@ -215,8 +214,10 @@ GET    /me                                  current user + tenants
 POST   /tenants                             create tenant (caller becomes OWNER)
 POST   /tenants/members                     invite member (OWNER)
 PUT    /tenants/members/{id}/role           change role (OWNER)
-PUT    /tenants/llm-settings                BYOK settings (OWNER)
-GET    /tenants/usage                       credits + token usage
+GET    /tenants/llm-settings                BYOK settings, key masked (OWNER)
+PUT    /tenants/llm-settings                save BYOK settings (OWNER)
+DELETE /tenants/llm-settings                remove BYOK settings (OWNER)
+GET    /usage                               plan, credits, tokens this period
 
 GET    /plans                               list plans
 GET    /billing/subscription                current plan, period end, credits
@@ -250,6 +251,13 @@ POST   /results/{id}/override               human override
 
 React + Vite + TypeScript, Auth0 SPA SDK, TanStack Query. Pages: login → tenant picker → jobs → rubric editor → batch upload (with progress bar) → ranked results → score card detail → settings (BYOK, plan, usage).
 On AWS, Caddy serves it as static files on the same EC2 instance.
+
+**Batch upload page:**
+- One drop zone that accepts many files or a whole folder (`<input type="file" multiple webkitdirectory>` + drag and drop). File names come from the files; the user never types them.
+- Client-side filter before any request: only `.pdf`/`.docx`, at most 5 MB; rejected files are listed with the reason.
+- More than 50 files → split into several batches automatically.
+- Flow: `POST /jobs/{id}/batches` with the names → PUT each file to its presigned URL, 4 at a time, with a per-file progress bar → retry failed uploads (URLs last 15 minutes) → `POST /batches/{id}/submit` → overall progress from SSE → link to ranked results.
+- Needs: CORS on the bucket for `PUT` from the frontend origin; SSE read with `fetch` (e.g. `@microsoft/fetch-event-source`), because the browser `EventSource` can't send the `Authorization` and `X-Tenant-Id` headers.
 
 ---
 
@@ -306,12 +314,13 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [ ] Run on the Docker PC: batch of 3–5 files incl. one duplicate and one never uploaded, watch SSE, check results
 
 ### Phase 5 — Billing & BYOK
-- [ ] Plans seed data, FREE subscription created with each new tenant
-- [ ] Fake checkout + simulate success/failure + `PaymentSucceeded` / `PaymentFailed` events
-- [ ] Credit ledger + atomic reservation + refunds
-- [ ] 30-day period check on read (reset FREE credits, expire paid plans to FREE)
-- [ ] Encrypted BYOK settings + per-tenant ChatClient cache
-- [ ] Usage page (credits, tokens)
+- [x] Plans enum, FREE subscription created with each new tenant (`TenantCreated` event), `V7__billing_and_byok.sql`
+- [x] Fake checkout + simulate success/failure, idempotent by payment status
+- [x] Credit ledger + row-locked reservation (batch submit, single screening) + refunds
+- [x] 30-day period check on read (FREE renews, paid plans fall back to FREE)
+- [x] Encrypted BYOK settings + SSRF guard + per-tenant ChatClient cache
+- [x] `GET /usage` (plan, credits, tokens), `SubscriptionTests`, `LlmSettingsTests`
+- [ ] Run on the Docker PC: subscription, checkout success/failure, batch reservation + refunds in the ledger, 402 when out of credits, BYOK with a real key
 
 ### Phase 6 — Review & quality
 - [ ] Human overrides
@@ -340,8 +349,9 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - **Keyword gate + LLM:** keywords are cheap and explainable; the LLM handles context. The gate saves quota.
 - **Defense-in-depth tenancy:** app-level `tenant_id` + Postgres RLS (transaction-scoped setting) + per-tenant S3 prefixes.
 - **Per-tenant RBAC:** roles live in the DB per tenant, permissions in code; one ownership rule for record-level access.
-- **Billing behind an interface:** fake gateway now, Stripe later; payment results handled idempotently through events.
-- **Atomic credit reservation + ledger:** concurrent batch submissions can't overspend, and every credit change is audited.
+- **Billing behind an interface:** fake gateway now, Stripe later; the payment result is applied once (row lock + `PENDING` check), so a replayed webhook can't grant credits twice.
+- **Atomic credit reservation + ledger:** row-locked reservation, so concurrent batch submissions can't overspend; every credit change is an append-only ledger row; refunds tied to the idempotent status transition.
+- **BYOK done safely:** AES-GCM at rest, masked in responses and logs, SSRF guard on the tenant base URL, per-tenant client cache.
 - **Queue-based batching:** presigned uploads (no file bytes through the app), transactional outbox (Modulith) → SQS, rate-limit-aware concurrency, retries, dead-letter queue, idempotent worker via a conditional status update.
 - **Portable infrastructure:** S3/SQS APIs with RustFS/ElasticMQ locally — the same code runs on and off AWS.
 - **Model independence + BYOK:** one OpenAI-compatible client, configured per tenant at runtime.
