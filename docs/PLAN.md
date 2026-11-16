@@ -333,13 +333,19 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [ ] Negative API checks: foreign `X-Tenant-Id` → 403, duplicate upload → 409, upload to draft job → 409, `.txt` upload → 415, VIEWER creating a job → 403
 
 ### Phase 7 — AWS demo week
-- [ ] **AWS Budgets alerts at $5 / $15 / $30 before creating anything**
-- [ ] S3 bucket (private, CORS for presigned PUT), SQS queue + dead-letter queue
-- [ ] EC2 `t4g.small` (public subnet, no NAT, no ALB), Docker Compose, Caddy TLS
-- [ ] IAM instance role (no access keys on the box)
+- [x] `infra/aws/budget.yaml`: one CloudFormation stack with email alerts at $5 / $15 / $30 of actual spend, **credits excluded** (otherwise the $100 credits hide all spend and no alert ever fires). Created first, deleted last.
+- [x] `infra/aws/stack.yaml`: one CloudFormation stack for everything else, so teardown is one delete:
+  - S3 bucket `talent-resumes-<account>-<region>`: private, encrypted, files expire after 7 days, CORS for presigned `PUT`
+  - SQS `resume-screening` (visibility 120 s) + `resume-screening-dlq` (maxReceiveCount 3), same as ElasticMQ locally
+  - IAM role with least privilege (only this bucket and these two queues) → no access keys anywhere
+  - EC2 `t4g.small` (ARM, Amazon Linux 2023), 20 GB encrypted gp3, 2 GB swap, Docker + Compose + buildx installed by user data; IMDSv2 required with hop limit 2 so containers can use the instance role
+  - No SSH: port 22 closed, admin through **SSM Session Manager**; security group opens only 80/443
+  - Elastic IP; the `Domain` output is `<ip-with-dashes>.sslip.io`, so Caddy gets a real Let's Encrypt certificate without buying a domain
+- [x] `Dockerfile` (multi-stage, Temurin 21 JDK → JRE, non-root user), `compose.aws.yaml` (Postgres, app, Caddy), `infra/aws/Caddyfile`, `infra/aws/aws.env.example`; `application-aws.yaml` fails fast if the queue is missing and trusts proxy headers
+- [ ] Deploy: budget stack → main stack → Session Manager → clone repo, write `.env`, `docker compose -f compose.aws.yaml up -d --build`
 - [ ] Run a real batch (50–100 resumes); record numbers: throughput, cost/resume, gate skip rate
 - [ ] Screenshots, a 2–3 min demo video, CloudWatch/console screenshots as proof
-- [ ] **Teardown:** terminate EC2, delete S3 bucket + SQS queues, release Elastic IP, delete snapshots/volumes, check billing after 24h
+- [ ] **Teardown:** empty the bucket → delete the main stack (removes EC2, EBS, Elastic IP, queues, role, bucket) → check billing after 24 h → delete the budget stack
 
 ### Phase 8 — Docs
 - [ ] README: problem, architecture diagram, module diagram (Spring Modulith docs), key design decisions, demo video link
@@ -360,6 +366,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - **BYOK done safely:** AES-GCM at rest, masked in responses and logs, SSRF guard on the tenant base URL, per-tenant client cache.
 - **Queue-based batching:** presigned uploads (no file bytes through the app), transactional outbox (Modulith) → SQS, rate-limit-aware concurrency, retries, dead-letter queue, idempotent worker via a conditional status update.
 - **Portable infrastructure:** S3/SQS APIs with RustFS/ElasticMQ locally — the same code runs on and off AWS.
+- **Cheap, safe AWS demo:** everything in one CloudFormation stack (one delete tears it down), instance role instead of keys, no SSH port (Session Manager), IMDSv2, budget alerts that ignore credits.
 - **Model independence + BYOK:** one OpenAI-compatible client, configured per tenant at runtime.
 
 ---
