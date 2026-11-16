@@ -327,7 +327,8 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] Human overrides: `PUT/DELETE /results/{id}/override`, history in `score_overrides`, ranking by `rank_score` (`V8__score_overrides.sql`). Lives in `screening`; the empty `review` module was removed.
 - [x] AI layer tests with a scripted `ChatModel` (`ScreeningAgentTests`): one call, retry with feedback, zeroing unsupported evidence, non-JSON reply. No network, no WireMock.
 - [x] Eval harness: `src/test/resources/eval/backend-java/` (file name prefix = hand rank), `ScreeningEvalTests` (runs only when `LLM_API_KEY` is set, real model, pass if pairwise agreement >= 0.8), `RankingAgreementTests`
-- [ ] Grow the eval set from 6 synthetic resumes to ~20 (anonymized real ones), run it on the Docker PC and record the agreement score
+- [x] First eval run (2026-11-16, Groq `openai/gpt-oss-120b`, 6 synthetic resumes): pairwise agreement **1.00**; the keyword-only resume scored keyword 100 but AI 20, ranking below a real junior
+- [ ] Grow the eval set from 6 synthetic resumes to ~20 (anonymized real ones) and record the agreement score
 - [ ] Run overrides on the Docker PC: override, ranking order changes, clear, history
 - [ ] Negative API checks: foreign `X-Tenant-Id` → 403, duplicate upload → 409, upload to draft job → 409, `.txt` upload → 415, VIEWER creating a job → 403
 
