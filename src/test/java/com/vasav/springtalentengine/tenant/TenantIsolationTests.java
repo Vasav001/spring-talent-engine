@@ -66,6 +66,7 @@ class TenantIsolationTests {
                 "INSERT INTO tenant_members (id, tenant_id, email, role, created_at) VALUES (gen_random_uuid(), ?, ?, 'OWNER', now())",
                 tenantB, "erin@e.test"))
                 .isInstanceOf(DataAccessException.class)
+                .rootCause()
                 .hasMessageContaining("row-level security");
     }
 
