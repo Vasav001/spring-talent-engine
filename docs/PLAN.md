@@ -347,15 +347,17 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] `Dockerfile` (multi-stage, Temurin 21 JDK → JRE, non-root user), `compose.aws.yaml` (Postgres, app, Caddy), `infra/aws/Caddyfile`, `infra/aws/aws.env.example`; `application-aws.yaml` fails fast if the queue is missing and trusts proxy headers
 - [x] `docker build` of the app image works on the Docker PC (2026-11-17)
 - [x] Deploy (2026-11-17, region `ap-southeast-2`, Sydney): budget stack → main stack → Session Manager → clone repo, write `.env` (incl. `AWS_REGION`), `docker compose -f compose.aws.yaml up -d --build`. HTTPS via Caddy + Let's Encrypt on `<ip>.sslip.io` works.
-- [x] Same 40 API checks against AWS: **40/40** (real S3 presigned uploads, SQS worker, SSE, credits, payments, BYOK, overrides, 403). Batch of 8 files (6 resumes + 1 duplicate + 1 missing): 5 of 6 resumes done about 20 s after submit with concurrency 2; one resume (04) failed its first attempt, came back after the 120 s SQS visibility timeout and succeeded, so the batch completed after 130 s (the retry path working for real). 4 AI screenings used about 4.7k input + 5.0k output tokens (~2.4k tokens per screened resume)
+- [x] Same 40 API checks against AWS: **40/40** (real S3 presigned uploads, SQS worker, SSE, credits, payments, BYOK, overrides, 403). Batch of 8 files (6 resumes + 1 duplicate + 1 missing): 5 of 6 resumes done about 20 s after submit with concurrency 2; one resume (04) failed its first attempt, came back after the 120 s SQS visibility timeout and succeeded, so the batch completed after 130 s (the retry path working for real). 4 AI screenings used about 4.7k input + 5.0k output tokens (~2.4k tokens per screened resume). After offering the GitHub tool only to resumes with a GitHub link (see 5.5), the same run completed in **19.4 s with no retry**, 40/40 checks, ~2.2k tokens per screened resume
 - [ ] Lesson: the app fell back to `ap-south-1` while the stack was in Sydney ("queue does not exist"). Consider removing the region fallback in `application-aws.yaml` so the SDK reads the region from the EC2 instance
 - [ ] Run a real batch (50–100 resumes); record numbers: throughput, cost/resume, gate skip rate
 - [ ] Screenshots, a 2–3 min demo video, CloudWatch/console screenshots as proof
 - [ ] **Teardown:** empty the bucket → delete the main stack (removes EC2, EBS, Elastic IP, queues, role, bucket) → check billing after 24 h → delete the budget stack
 
 ### Phase 8 — Docs
-- [ ] README: problem, architecture diagram, module diagram (Spring Modulith docs), key design decisions, demo video link
-- [ ] ADRs for: modular monolith, single agent + code verification, RLS, endpoint-swap infrastructure, billing + credits model
+- [x] `README.md`: pitch, highlights, Mermaid architecture, module and screening diagrams, results table (eval 1.00, 40/40 on AWS, 19.4 s batch, tokens, cost), running, tests, deploy, links to ADRs, limitations
+- [x] ADRs in `docs/adr/`: 0001 modular monolith, 0002 single agent + Java verification, 0003 RLS, 0004 swappable S3/SQS endpoints, 0005 billing + credits
+- [x] `ModularityTests` also writes Spring Modulith PlantUML module docs to `target/spring-modulith-docs`
+- [ ] Add the demo video link and a few screenshots to the README
 
 ---
 
