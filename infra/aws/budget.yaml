@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Cost alerts for the spring-talent-engine demo week. Create this before the main stack and delete it last.
+Description: Cost alerts for the spring-talent-engine demo week. talent-real-charges fires on any spend not covered by credits; talent-demo tracks how fast credits are used. Create this before the main stack and delete it last.
 
 Parameters:
   AlertEmail:
@@ -7,6 +7,29 @@ Parameters:
     Description: Email address that receives the budget alerts
 
 Resources:
+  RealChargesBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: talent-real-charges
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: 1
+          Unit: USD
+        CostTypes:
+          IncludeCredit: true
+          IncludeRefund: false
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 0.01
+            ThresholdType: ABSOLUTE_VALUE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
   DemoBudget:
     Type: AWS::Budgets::Budget
     Properties:

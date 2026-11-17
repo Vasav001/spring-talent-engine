@@ -333,7 +333,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [ ] Negative API checks: foreign `X-Tenant-Id` → 403, duplicate upload → 409, upload to draft job → 409, `.txt` upload → 415, VIEWER creating a job → 403
 
 ### Phase 7 — AWS demo week
-- [x] `infra/aws/budget.yaml`: one CloudFormation stack with email alerts at $5 / $15 / $30 of actual spend, **credits excluded** (otherwise the $100 credits hide all spend and no alert ever fires). Created first, deleted last.
+- [x] `infra/aws/budget.yaml`: **zero out-of-pocket rule** (only free credits may be used). Two budgets (both free): `talent-real-charges` alerts on any net charge above $0.01 after credits; `talent-demo` alerts at $5 / $15 / $30 of usage with credits excluded, to show how fast credits burn. Stay on the AWS **Free plan** (it cannot bill a card; the Paid plan bills anything beyond credits). Created first, deleted last.
 - [x] `infra/aws/stack.yaml`: one CloudFormation stack for everything else, so teardown is one delete:
   - S3 bucket `talent-resumes-<account>-<region>`: private, encrypted, files expire after 7 days, CORS for presigned `PUT`
   - SQS `resume-screening` (visibility 120 s) + `resume-screening-dlq` (maxReceiveCount 3), same as ElasticMQ locally
