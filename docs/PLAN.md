@@ -173,6 +173,8 @@ A user has one role **per tenant** (`tenant_members.role`). Roles are mapped to 
 |---|---|
 | `getGithubSummary(username)` | Own public repos, top languages, recently pushed repos (GitHub REST API, 5 s timeout, optional `GITHUB_TOKEN`). Only called when the resume links a GitHub profile; used for strengths/gaps, never as evidence. |
 
+The tool is only offered when the resume has a GitHub username. On AWS, Groq's `openai/gpt-oss-120b` once tried to call a non-existent `json` tool when it had tools and a JSON answer at the same time; Groq rejects that with a 400. Not offering an unusable tool removes that failure for most resumes and saves tokens; the queue retry covers the rest.
+
 A `normalizeSkill` tool was dropped: synonyms are applied in Java before and after the LLM call, so the tool added nothing.
 
 ### 5.5 Model independence
@@ -290,7 +292,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] Postgres RLS + non-owner app role + `TenantIsolationTests`
 - [x] `ApplicationModules.verify()` test
 - [x] Run on the Docker PC: app starts, `/me` and `/tenants` work with a real Auth0 token
-- [ ] Full test suite (`./mvnw test`) passes on the Docker PC
+- [x] Full test suite (`./mvnw test`) passes on the Docker PC (2026-11-17, incl. Testcontainers RLS tests)
 
 ### Phase 2 — Jobs & rubric
 - [x] Job CRUD + paged list, RLS on `jobs` and `job_requirements`
@@ -312,7 +314,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] Queue fan-out (ElasticMQ) through the Modulith outbox, configurable concurrency, 3 attempts, dead-letter queue
 - [x] Idempotency (conditional status update) + content-hash dedup
 - [x] SSE progress
-- [ ] Run on the Docker PC: batch of 3–5 files incl. one duplicate and one never uploaded, watch SSE, check results
+- [x] Run end to end (2026-11-17, native local services): 7 files incl. one duplicate and one never uploaded, presigned uploads, SSE to COMPLETED, ranking
 
 ### Phase 5 — Billing & BYOK
 - [x] Plans enum, FREE subscription created with each new tenant (`TenantCreated` event), `V7__billing_and_byok.sql`
@@ -321,7 +323,8 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] 30-day period check on read (FREE renews, paid plans fall back to FREE)
 - [x] Encrypted BYOK settings + SSRF guard + per-tenant ChatClient cache
 - [x] `GET /usage` (plan, credits, tokens), `SubscriptionTests`, `LlmSettingsTests`
-- [ ] Run on the Docker PC: subscription, checkout success/failure, batch reservation + refunds in the ledger, 402 when out of credits, BYOK with a real key
+- [x] Run end to end (2026-11-17): FREE start, reservation -7 and 3 refunds matching the ledger, PRO checkout, replayed and failed payments, BYOK screening with a real key and no credits used
+- [ ] 402 when out of credits (not exercised yet)
 
 ### Phase 6 — Review & quality
 - [x] Human overrides: `PUT/DELETE /results/{id}/override`, history in `score_overrides`, ranking by `rank_score` (`V8__score_overrides.sql`). Lives in `screening`; the empty `review` module was removed.
@@ -329,7 +332,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] Eval harness: `src/test/resources/eval/backend-java/` (file name prefix = hand rank), `ScreeningEvalTests` (runs only when `LLM_API_KEY` is set, real model, pass if pairwise agreement >= 0.8), `RankingAgreementTests`
 - [x] First eval run (2026-11-16, Groq `openai/gpt-oss-120b`, 6 synthetic resumes): pairwise agreement **1.00**; the keyword-only resume scored keyword 100 but AI 20, ranking below a real junior
 - [ ] Grow the eval set from 6 synthetic resumes to ~20 (anonymized real ones) and record the agreement score
-- [ ] Run overrides on the Docker PC: override, ranking order changes, clear, history
+- [x] Overrides run end to end (2026-11-17): override, ranking order changes, clear, 2 history entries
 - [ ] Negative API checks: foreign `X-Tenant-Id` → 403, duplicate upload → 409, upload to draft job → 409, `.txt` upload → 415, VIEWER creating a job → 403
 
 ### Phase 7 — AWS demo week
@@ -342,7 +345,10 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
   - No SSH: port 22 closed, admin through **SSM Session Manager**; security group opens only 80/443
   - Elastic IP; the `Domain` output is `<ip-with-dashes>.sslip.io`, so Caddy gets a real Let's Encrypt certificate without buying a domain
 - [x] `Dockerfile` (multi-stage, Temurin 21 JDK → JRE, non-root user), `compose.aws.yaml` (Postgres, app, Caddy), `infra/aws/Caddyfile`, `infra/aws/aws.env.example`; `application-aws.yaml` fails fast if the queue is missing and trusts proxy headers
-- [ ] Deploy: budget stack → main stack → Session Manager → clone repo, write `.env`, `docker compose -f compose.aws.yaml up -d --build`
+- [x] `docker build` of the app image works on the Docker PC (2026-11-17)
+- [x] Deploy (2026-11-17, region `ap-southeast-2`, Sydney): budget stack → main stack → Session Manager → clone repo, write `.env` (incl. `AWS_REGION`), `docker compose -f compose.aws.yaml up -d --build`. HTTPS via Caddy + Let's Encrypt on `<ip>.sslip.io` works.
+- [x] Same 40 API checks against AWS: **40/40** (real S3 presigned uploads, SQS worker, SSE, credits, payments, BYOK, overrides, 403). Batch of 8 files (6 resumes + 1 duplicate + 1 missing): 5 of 6 resumes done about 20 s after submit with concurrency 2; one resume (04) failed its first attempt, came back after the 120 s SQS visibility timeout and succeeded, so the batch completed after 130 s (the retry path working for real). 4 AI screenings used about 4.7k input + 5.0k output tokens (~2.4k tokens per screened resume)
+- [ ] Lesson: the app fell back to `ap-south-1` while the stack was in Sydney ("queue does not exist"). Consider removing the region fallback in `application-aws.yaml` so the SDK reads the region from the EC2 instance
 - [ ] Run a real batch (50–100 resumes); record numbers: throughput, cost/resume, gate skip rate
 - [ ] Screenshots, a 2–3 min demo video, CloudWatch/console screenshots as proof
 - [ ] **Teardown:** empty the bucket → delete the main stack (removes EC2, EBS, Elastic IP, queues, role, bucket) → check billing after 24 h → delete the budget stack

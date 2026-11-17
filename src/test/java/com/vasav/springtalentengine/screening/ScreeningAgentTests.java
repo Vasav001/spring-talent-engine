@@ -8,6 +8,7 @@ import com.vasav.springtalentengine.screening.ScreeningAgent.AgentResult;
 import com.vasav.springtalentengine.screening.ScreeningReport.CriterionResult;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
 
 import java.util.List;
 import java.util.UUID;
@@ -85,6 +86,28 @@ class ScreeningAgentTests {
         assertThat(kafka.score()).isZero();
         assertThat(kafka.verified()).isFalse();
         assertThat(result.verification().criteria().get(0).score()).isEqualTo(5);
+    }
+
+    @Test
+    void offersTheGithubToolOnlyWhenTheResumeLinksAProfile() {
+        ScriptedChatModel withoutGithub = new ScriptedChatModel(GOOD_CARD);
+        ScriptedChatModel withGithub = new ScriptedChatModel(GOOD_CARD);
+        ResumeContent githubResume = new ResumeContent(UUID.randomUUID(), rubric.jobId(), "cv.pdf", RESUME, "octocat");
+
+        agent.screen(ChatClient.create(withoutGithub), rubric, resume);
+        agent.screen(ChatClient.create(withGithub), rubric, githubResume);
+
+        assertThat(toolNames(withoutGithub)).isEmpty();
+        assertThat(toolNames(withGithub)).containsExactly("getGithubSummary");
+    }
+
+    private static List<String> toolNames(ScriptedChatModel model) {
+        if (!(model.prompts().get(0).getOptions() instanceof ToolCallingChatOptions options) || options.getToolCallbacks() == null) {
+            return List.of();
+        }
+        return options.getToolCallbacks().stream()
+                .map(callback -> callback.getToolDefinition().name())
+                .toList();
     }
 
     @Test

@@ -32,8 +32,13 @@ class ScriptedChatModel implements ChatModel {
     }
 
     @Override
-    public ChatOptions getDefaultOptions() {
+    public ChatOptions getOptions() {
         return ToolCallingChatOptions.builder().build();
+    }
+
+    @Override
+    public ChatOptions getDefaultOptions() {
+        return getOptions();
     }
 
     List<Prompt> prompts() {

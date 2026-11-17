@@ -58,16 +58,17 @@ class ScreeningAgent {
     }
 
     private Attempt ask(ChatClient chatClient, JobRubric rubric, ResumeContent resume, String feedback) {
-        ResponseEntity<ChatResponse, AgentScoreCard> response = chatClient.prompt()
+        ChatClient.ChatClientRequestSpec request = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
                 .user(user -> user.text(USER_PROMPT)
                         .param("title", rubric.title())
                         .param("rubric", formatRubric(rubric))
                         .param("resume", resume.text())
-                        .param("feedback", feedback))
-                .tools(githubTool)
-                .call()
-                .responseEntity(AgentScoreCard.class);
+                        .param("feedback", feedback));
+        if (resume.githubUsername() != null) {
+            request = request.tools(githubTool);
+        }
+        ResponseEntity<ChatResponse, AgentScoreCard> response = request.call().responseEntity(AgentScoreCard.class);
         AgentScoreCard card = response.getEntity();
         if (card == null) {
             throw new IllegalStateException("Model returned no score card");

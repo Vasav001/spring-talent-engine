@@ -81,6 +81,7 @@ class ScreeningService {
             resumeProcessing.finish(resumeId, e.getMessage(), true);
         } catch (RuntimeException e) {
             if (!lastAttempt) {
+                log.warn("Screening attempt failed for resume {}, the queue will retry it: {}", resumeId, e.getMessage());
                 throw e;
             }
             log.warn("Giving up on resume {}", resumeId, e);
