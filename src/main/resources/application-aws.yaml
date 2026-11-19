@@ -1,8 +1,6 @@
 spring:
   cloud:
     aws:
-      region:
-        static: ${AWS_REGION:ap-south-1}
       sqs:
         queue-not-found-strategy: fail
 

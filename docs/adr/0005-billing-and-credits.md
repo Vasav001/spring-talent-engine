@@ -20,5 +20,6 @@ A SaaS needs plans and usage limits, but real payments are out of scope. LLM cal
 
 ## Consequences
 - The ledger always explains the balance (verified end to end: reserve 7, refund 3, balance 46).
+- Verified on AWS: a 50-file batch with 49 credits gets 402 and stays untouched; concurrent submits never pushed the balance below 0. Keyword-gate refunds land within about 0.2 s, so rejected resumes free their credit almost immediately.
 - No background jobs to run or monitor.
 - Token usage is shown per period but not billed.

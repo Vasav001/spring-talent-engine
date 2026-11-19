@@ -109,7 +109,11 @@ sequenceDiagram
 | Keyword-stuffed resume (all skills listed, no experience) | keyword 100, AI 20 → ranked below a real junior |
 | API checks on AWS (uploads, queue, SSE, credits, payments, BYOK, overrides, isolation) | **40/40** |
 | 8-file batch on AWS, 2 workers | **19.4 s** from submit to complete |
-| Tokens per AI-screened resume | about 2,200 |
+| **Load test on AWS:** 50 synthetic resumes, 2 workers, Groq free tier | **7.6 min** end to end, **6.6 resumes/min** (5.3 AI screenings/min), 0 failures, 0 queue retries; 50 presigned uploads in 7 s |
+| Keyword gate in the load test | skipped 10 of 50 (20 %), exactly the resumes missing a required skill; 10 credits refunded |
+| Quality under load | all 35 real Java profiles ranked above all 5 keyword-stuffers (best stuffer: 36th of 50) |
+| Tokens per AI-screened resume | about 1,800–2,200 |
+| Bottleneck | the LLM provider's free-tier limit (8,000 tokens/min), not the app: steady 5 AI screenings per minute after a first-minute burst of 9 |
 | Cost | LLM $0 (Groq free tier); AWS about $4–5 per week, covered by free credits |
 
 ## Tech stack

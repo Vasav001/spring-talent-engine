@@ -324,7 +324,7 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] Encrypted BYOK settings + SSRF guard + per-tenant ChatClient cache
 - [x] `GET /usage` (plan, credits, tokens), `SubscriptionTests`, `LlmSettingsTests`
 - [x] Run end to end (2026-11-17): FREE start, reservation -7 and 3 refunds matching the ledger, PRO checkout, replayed and failed payments, BYOK screening with a real key and no credits used
-- [ ] 402 when out of credits (not exercised yet)
+- [x] 402 when out of credits (verified on AWS 2026-11-19, see Phase 7)
 
 ### Phase 6 — Review & quality
 - [x] Human overrides: `PUT/DELETE /results/{id}/override`, history in `score_overrides`, ranking by `rank_score` (`V8__score_overrides.sql`). Lives in `screening`; the empty `review` module was removed.
@@ -348,8 +348,10 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] `docker build` of the app image works on the Docker PC (2026-11-17)
 - [x] Deploy (2026-11-17, region `ap-southeast-2`, Sydney): budget stack → main stack → Session Manager → clone repo, write `.env` (incl. `AWS_REGION`), `docker compose -f compose.aws.yaml up -d --build`. HTTPS via Caddy + Let's Encrypt on `<ip>.sslip.io` works.
 - [x] Same 40 API checks against AWS: **40/40** (real S3 presigned uploads, SQS worker, SSE, credits, payments, BYOK, overrides, 403). Batch of 8 files (6 resumes + 1 duplicate + 1 missing): 5 of 6 resumes done about 20 s after submit with concurrency 2; one resume (04) failed its first attempt, came back after the 120 s SQS visibility timeout and succeeded, so the batch completed after 130 s (the retry path working for real). 4 AI screenings used about 4.7k input + 5.0k output tokens (~2.4k tokens per screened resume). After offering the GitHub tool only to resumes with a GitHub link (see 5.5), the same run completed in **19.4 s with no retry**, 40/40 checks, ~2.2k tokens per screened resume
-- [ ] Lesson: the app fell back to `ap-south-1` while the stack was in Sydney ("queue does not exist"). Consider removing the region fallback in `application-aws.yaml` so the SDK reads the region from the EC2 instance
-- [ ] Run a real batch (50–100 resumes); record numbers: throughput, cost/resume, gate skip rate
+- [x] Lesson: the app fell back to `ap-south-1` while the stack was in Sydney ("queue does not exist"). Fixed: `application-aws.yaml` has no region fallback any more; the SDK uses `AWS_REGION` or the EC2 instance's own region
+- [x] Out-of-credits check on AWS (2026-11-19, `E:\localinfra\credits-check.py`): 50-file batch with 49 credits → **402**, batch left untouched; concurrent submits never pushed the balance below 0 (ledger checked). Keyword-gate refunds arrive within ~0.2 s, so they free credits almost immediately
+- [x] Error responses use RFC 7807 problem details (`spring.mvc.problemdetails.enabled`), so clients see the reason as `detail` (e.g. "Not enough credits: 50 needed, 49 left"); unexpected 500s still hide internals
+- [x] Load test on AWS (2026-11-19): 50 synthetic resumes (35 Java profiles, 10 missing a MUST skill, 5 keyword-stuffers), 2 workers. 7.6 min end to end, 6.6 resumes/min overall, 5.3 AI screenings/min (steady 5/min after a first-minute burst of 9), 0 failures, 0 SQS retries, gate skipped 20 %, ~1,800 tokens per AI resume, all real profiles ranked above all stuffers. Bottleneck: Groq free tier 8,000 tokens/min (and 1,000 requests/day). Scripts: `E:\localinfra\make-load-resumes.py`, `E:\localinfra\load-test.py`
 - [ ] Screenshots, a 2–3 min demo video, CloudWatch/console screenshots as proof
 - [ ] **Teardown:** empty the bucket → delete the main stack (removes EC2, EBS, Elastic IP, queues, role, bucket) → check billing after 24 h → delete the budget stack
 

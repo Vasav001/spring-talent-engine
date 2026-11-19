@@ -14,6 +14,9 @@ spring:
     placeholders:
       "[app_user]": ${DB_APP_USERNAME:talent_app}
       "[app_password]": ${DB_APP_PASSWORD:talent_app}
+  mvc:
+    problemdetails:
+      enabled: true
   servlet:
     multipart:
       max-file-size: 5MB
