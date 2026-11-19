@@ -19,5 +19,6 @@ The app must run for free on a low-end PC most of the time and on AWS only for a
 - **Database polling as a queue:** simpler but no visibility timeout, dead-letter queue or real SQS experience.
 
 ## Consequences
+- Seen on AWS during the 50-resume load test: the queue absorbed all 50 messages at once and drained them steadily with 2 workers ([SQS graphs](../screenshots/aws-04-sqs-monitoring-load-test.png)); files landed in per-tenant folders through presigned uploads ([S3 folders](../screenshots/aws-07-s3-per-tenant-folders.png)).
 - Same code locally and on AWS; only `application-local.yaml` and `application-aws.yaml` differ.
 - On AWS the region must match the stack: a hard-coded fallback once pointed the app at Mumbai while the stack was in Sydney ("queue does not exist"). The fallback was removed; the SDK now uses `AWS_REGION` or the EC2 instance's own region.

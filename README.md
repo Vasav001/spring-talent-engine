@@ -4,7 +4,7 @@ Multi-tenant AI resume screening platform. Companies upload batches of resumes a
 
 Built with Spring Boot 4, Spring AI 2, Spring Modulith, PostgreSQL row-level security, S3 and SQS. Runs locally on S3/SQS-compatible containers and was deployed to AWS for a one-week demo.
 
-> Demo video: _coming soon_
+> Screenshots of the AWS deployment and load test: [jump to Screenshots](#screenshots-aws-demo-week)
 
 ## Highlights
 
@@ -115,6 +115,42 @@ sequenceDiagram
 | Tokens per AI-screened resume | about 1,800–2,200 |
 | Bottleneck | the LLM provider's free-tier limit (8,000 tokens/min), not the app: steady 5 AI screenings per minute after a first-minute burst of 9 |
 | Cost | LLM $0 (Groq free tier); AWS about $4–5 per week, covered by free credits |
+
+## Screenshots (AWS demo week)
+
+All taken during the deployment in `ap-southeast-2` on 2026-11-19; account details are cropped or blacked out.
+
+**One CloudFormation template creates everything** ([`infra/aws/stack.yaml`](infra/aws/stack.yaml)); teardown is one stack delete.
+
+![CloudFormation stacks](docs/screenshots/aws-01-cloudformation-stacks.png)
+
+<img src="docs/screenshots/aws-02-cloudformation-resources.png" alt="CloudFormation resources" width="560">
+
+**Queue during the 50-resume load test.** The 50 messages arrive at once (the transactional outbox sends them after the batch commits), the 2 workers drain them steadily, and nothing reaches the dead-letter queue. Graph times are UTC (17:00 = 22:30 IST).
+
+![SQS queues](docs/screenshots/aws-03-sqs-queues.png)
+
+![SQS monitoring during the load test](docs/screenshots/aws-04-sqs-monitoring-load-test.png)
+
+**The server is not the bottleneck.** CPU on the `t4g.small` peaked at 3.2 % while screening 50 resumes; throughput is capped by the LLM provider's free-tier token limit.
+
+![EC2 CPU during the load test](docs/screenshots/aws-06-ec2-cpu-load-test.png)
+
+![EC2 monitoring](docs/screenshots/aws-05-ec2-monitoring.png)
+
+**Storage.** Files are uploaded straight to S3 with presigned URLs into per-tenant folders (`tenants/{tenantId}/jobs/{jobId}/`). The bucket is private, encrypted, and deletes demo files after 7 days.
+
+![S3 per-tenant folders](docs/screenshots/aws-07-s3-per-tenant-folders.png)
+
+![S3 public access and encryption](docs/screenshots/aws-08-s3-public-access-and-encryption.png)
+
+![S3 lifecycle rule](docs/screenshots/aws-09-s3-lifecycle-7-days.png)
+
+**Access and HTTPS.** The instance role has only Session Manager access plus an inline policy for this bucket and these two queues (no access keys, no SSH port). Caddy serves a Let's Encrypt certificate on a free `sslip.io` name and adds HSTS.
+
+![IAM role policies](docs/screenshots/aws-10-iam-role-policies.png)
+
+<img src="docs/screenshots/aws-11-https-health.png" alt="Health endpoint over HTTPS" width="480"> <img src="docs/screenshots/aws-12-https-response-headers.png" alt="Response headers through Caddy" width="480">
 
 ## Tech stack
 

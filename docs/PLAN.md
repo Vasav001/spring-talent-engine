@@ -352,14 +352,15 @@ On AWS, Caddy serves it as static files on the same EC2 instance.
 - [x] Out-of-credits check on AWS (2026-11-19, `E:\localinfra\credits-check.py`): 50-file batch with 49 credits → **402**, batch left untouched; concurrent submits never pushed the balance below 0 (ledger checked). Keyword-gate refunds arrive within ~0.2 s, so they free credits almost immediately
 - [x] Error responses use RFC 7807 problem details (`spring.mvc.problemdetails.enabled`), so clients see the reason as `detail` (e.g. "Not enough credits: 50 needed, 49 left"); unexpected 500s still hide internals
 - [x] Load test on AWS (2026-11-19): 50 synthetic resumes (35 Java profiles, 10 missing a MUST skill, 5 keyword-stuffers), 2 workers. 7.6 min end to end, 6.6 resumes/min overall, 5.3 AI screenings/min (steady 5/min after a first-minute burst of 9), 0 failures, 0 SQS retries, gate skipped 20 %, ~1,800 tokens per AI resume, all real profiles ranked above all stuffers. Bottleneck: Groq free tier 8,000 tokens/min (and 1,000 requests/day). Scripts: `E:\localinfra\make-load-resumes.py`, `E:\localinfra\load-test.py`
-- [ ] Screenshots, a 2–3 min demo video, CloudWatch/console screenshots as proof
+- [x] Screenshots (no video): 12 AWS console and browser screenshots in `docs/screenshots/` (account details cropped or blacked out), shown in the README "Screenshots" section
+- [ ] Frontend screenshots once the frontend exists
 - [ ] **Teardown:** empty the bucket → delete the main stack (removes EC2, EBS, Elastic IP, queues, role, bucket) → check billing after 24 h → delete the budget stack
 
 ### Phase 8 — Docs
 - [x] `README.md`: pitch, highlights, Mermaid architecture, module and screening diagrams, results table (eval 1.00, 40/40 on AWS, 19.4 s batch, tokens, cost), running, tests, deploy, links to ADRs, limitations
 - [x] ADRs in `docs/adr/`: 0001 modular monolith, 0002 single agent + Java verification, 0003 RLS, 0004 swappable S3/SQS endpoints, 0005 billing + credits
 - [x] `ModularityTests` also writes Spring Modulith PlantUML module docs to `target/spring-modulith-docs`
-- [ ] Add the demo video link and a few screenshots to the README
+- [x] Screenshots added to the README (AWS); frontend screenshots later
 
 ---
 
